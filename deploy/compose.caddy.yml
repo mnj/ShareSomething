@@ -1,0 +1,41 @@
+# ShareSomething behind Caddy (automatic HTTPS). Caddy appends the client IP to
+# X-Forwarded-For; the app trusts it only from the Caddy network.
+#
+#   docker compose -f deploy/compose.caddy.yml up -d
+#   docker compose -f deploy/compose.caddy.yml exec sharesomething sharesomething admin init
+services:
+  sharesomething:
+    build: ..
+    image: sharesomething:latest
+    restart: unless-stopped
+    environment:
+      SS_BASE_URL: https://share.example.com
+      SS_PROXY__MODE: forwarded
+      SS_PROXY__TRUSTED_PROXIES: 172.30.78.0/24
+    volumes:
+      - ss-data:/data
+    networks:
+      - proxy
+
+  caddy:
+    image: docker.io/library/caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    ipam:
+      config:
+        - subnet: 172.30.78.0/24
+
+volumes:
+  ss-data:
+  caddy-data:

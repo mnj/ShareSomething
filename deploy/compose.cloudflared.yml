@@ -1,0 +1,40 @@
+# ShareSomething behind a Cloudflare Tunnel; no ports are published on the host.
+#
+# 1. Create a tunnel in Cloudflare Zero Trust and add a public hostname pointing to
+#    http://sharesomething:8080
+# 2. TUNNEL_TOKEN=... docker compose -f deploy/compose.cloudflared.yml up -d
+# 3. docker compose -f deploy/compose.cloudflared.yml exec sharesomething sharesomething admin init
+services:
+  sharesomething:
+    build: ..
+    image: sharesomething:latest
+    restart: unless-stopped
+    environment:
+      SS_BASE_URL: https://share.example.com
+      SS_PROXY__MODE: cloudflare
+      # Only cloudflared lives on this network, so only it can set CF-Connecting-IP.
+      SS_PROXY__TRUSTED_PROXIES: 172.30.77.0/24
+    volumes:
+      - ss-data:/data
+    networks:
+      - tunnel
+
+  cloudflared:
+    image: docker.io/cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN}
+    depends_on:
+      - sharesomething
+    networks:
+      - tunnel
+
+networks:
+  tunnel:
+    ipam:
+      config:
+        - subnet: 172.30.77.0/24
+
+volumes:
+  ss-data:

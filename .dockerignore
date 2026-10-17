@@ -1,0 +1,9 @@
+target
+**/node_modules
+frontend/dist
+data
+backend/data
+.git
+*.log
+.env
+config.toml

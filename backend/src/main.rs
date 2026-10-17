@@ -52,6 +52,7 @@ enum Cmd {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_env("SS_LOG").unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,tower_http=info")))
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
         .init();
     let cli = Cli::parse();
     match cli.cmd.unwrap_or(Cmd::Serve) {

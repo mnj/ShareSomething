@@ -1,0 +1,4 @@
+share.example.com {
+	encode zstd gzip
+	reverse_proxy sharesomething:8080
+}
