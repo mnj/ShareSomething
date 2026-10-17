@@ -9,12 +9,14 @@ pub struct Shortcode;
 const BASE32: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
 const BASE62: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const DIGITS: &[u8] = b"0123456789";
+const HEX: &[u8] = b"0123456789abcdef";
 
 impl Shortcode {
     fn params(opts: &Value) -> Result<(usize, &'static [u8]), SlugError> {
         let len = int_opt(opts, "length", 4, 32, 8)? as usize;
-        let alphabet = match select_opt(opts, "alphabet", &["base32", "base62", "digits"], "base32")? {
+        let alphabet = match select_opt(opts, "alphabet", &["base32", "base62", "hex", "digits"], "base32")? {
             "base62" => BASE62,
+            "hex" => HEX,
             "digits" => DIGITS,
             _ => BASE32,
         };
@@ -50,6 +52,7 @@ impl SlugGenerator for Shortcode {
                         choices: vec![
                             Choice::new("base32", "Lowercase + digits (easy to type)"),
                             Choice::new("base62", "Mixed case + digits (shorter)"),
+                            Choice::new("hex", "Hex (0-9, a-f)"),
                             Choice::new("digits", "Digits only (PIN-like)"),
                         ],
                         default: "base32".into(),

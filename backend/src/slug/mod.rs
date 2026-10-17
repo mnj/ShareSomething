@@ -7,6 +7,8 @@ pub mod custom;
 pub mod pronounceable;
 pub mod registry;
 pub mod shortcode;
+pub mod template;
+pub mod uuid;
 pub mod words;
 
 use serde::Serialize;
@@ -56,9 +58,22 @@ pub struct OptionField {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum OptionKind {
-    Int { min: i64, max: i64, default: i64 },
-    Select { choices: Vec<Choice>, default: String },
-    Text { placeholder: String, pattern: String },
+    Int {
+        min: i64,
+        max: i64,
+        default: i64,
+    },
+    Select {
+        choices: Vec<Choice>,
+        default: String,
+    },
+    Text {
+        placeholder: String,
+        /// Client-side validation regex (empty = none).
+        pattern: String,
+        /// Pre-filled value (empty = the user must type one).
+        default: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

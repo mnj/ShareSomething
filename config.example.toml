@@ -39,7 +39,7 @@ mode = "none"
 trusted_proxies = []
 
 [slugs]
-# Link styles: shortcode, words, pronounceable, custom. Empty = all.
+# Link styles: shortcode, words, pronounceable, uuid, template, custom. Empty = all.
 enabled = []
 default = "shortcode"
 # Optional wordlist (one lowercase a-z word per line, at least 256) for the "words" style.

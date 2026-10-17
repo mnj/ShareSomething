@@ -816,6 +816,9 @@ export interface components {
             /** @enum {string} */
             type: "select";
         } | {
+            /** @description Pre-filled value (empty = the user must type one). */
+            default: string;
+            /** @description Client-side validation regex (empty = none). */
             pattern: string;
             placeholder: string;
             /** @enum {string} */

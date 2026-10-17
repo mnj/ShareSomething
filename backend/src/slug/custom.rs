@@ -38,6 +38,7 @@ impl SlugGenerator for Custom {
                 kind: OptionKind::Text {
                     placeholder: "wifi-guest".into(),
                     pattern: "^[a-z0-9]+(-[a-z0-9]+)*$".into(),
+                    default: String::new(),
                 },
             }],
         }

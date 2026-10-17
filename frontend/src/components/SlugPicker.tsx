@@ -10,7 +10,7 @@ export interface SlugChoice {
 
 function defaults(g: GeneratorInfo): Record<string, unknown> {
   const out: Record<string, unknown> = {}
-  for (const o of g.options) if (o.type !== 'text') out[o.name] = o.default
+  for (const o of g.options) if (o.type !== 'text' || o.default) out[o.name] = o.default
   return out
 }
 
@@ -121,7 +121,14 @@ function OptionInput({ field, value, onChange }: { field: OptionField; value: un
       return (
         <label className="field-inline grow">
           {field.label}
-          <input value={String(value ?? '')} placeholder={field.placeholder} pattern={field.pattern} onChange={(e) => onChange(e.target.value)} required />
+          <input
+            value={String(value ?? '')}
+            placeholder={field.placeholder}
+            pattern={field.pattern || undefined}
+            onChange={(e) => onChange(e.target.value)}
+            spellCheck={false}
+            required
+          />
         </label>
       )
   }

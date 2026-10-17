@@ -4,13 +4,18 @@ use super::*;
 
 /// Dictionary words joined by a separator, e.g. `monkey-space-balls-sun`.
 pub struct Words {
-    list: Vec<String>,
+    list: std::sync::Arc<Vec<String>>,
 }
 
 const EFF_SHORT: &str = include_str!("../../assets/eff_short_wordlist_1.txt");
 const SEPARATORS: [&str; 3] = ["-", ".", "_"];
 
 impl Words {
+    /// The word list, shared with other generators (e.g. templates).
+    pub fn list(&self) -> std::sync::Arc<Vec<String>> {
+        self.list.clone()
+    }
+
     pub fn eff() -> Self {
         Self::from_text(EFF_SHORT).expect("embedded wordlist is valid")
     }
@@ -28,7 +33,9 @@ impl Words {
             "wordlist needs at least 256 distinct a-z words, got {}",
             list.len()
         );
-        Ok(Self { list })
+        Ok(Self {
+            list: std::sync::Arc::new(list),
+        })
     }
 
     fn params(opts: &Value) -> Result<(usize, &str), SlugError> {

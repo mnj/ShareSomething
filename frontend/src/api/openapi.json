@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ShareSomething API",
-    "description": "",
+    "description": "Self-hosted sharing of text, links, credentials and files with per-share security",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -2216,11 +2216,17 @@
             "required": [
               "placeholder",
               "pattern",
+              "default",
               "type"
             ],
             "properties": {
+              "default": {
+                "type": "string",
+                "description": "Pre-filled value (empty = the user must type one)."
+              },
               "pattern": {
-                "type": "string"
+                "type": "string",
+                "description": "Client-side validation regex (empty = none)."
               },
               "placeholder": {
                 "type": "string"

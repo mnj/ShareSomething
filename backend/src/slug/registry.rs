@@ -22,10 +22,13 @@ pub fn builtins(cfg: &SlugConfig) -> anyhow::Result<Vec<Arc<dyn SlugGenerator>>>
         }
         None => words::Words::eff(),
     };
+    let template = template::Template::new(words.list());
     Ok(vec![
         Arc::new(shortcode::Shortcode),
         Arc::new(words),
         Arc::new(pronounceable::Pronounceable),
+        Arc::new(uuid::UuidSlug),
+        Arc::new(template),
         Arc::new(custom::Custom),
     ])
 }
@@ -123,6 +126,37 @@ mod tests {
         );
         let w = reg.generate("words", &json!({"count": 5, "separator": "."})).unwrap();
         assert_eq!(w.split('.').count(), 5);
+    }
+
+    #[test]
+    fn uuid_and_template() {
+        let reg = registry();
+        let v4 = reg.generate("uuid", &json!({})).unwrap();
+        assert_eq!(v4.len(), 36);
+        assert_eq!(::uuid::Uuid::parse_str(&v4).unwrap().get_version_num(), 4);
+        let v7 = reg.generate("uuid", &json!({"version": "v7", "format": "compact"})).unwrap();
+        assert_eq!(v7.len(), 32);
+        assert!(
+            reg.get("uuid")
+                .unwrap()
+                .validate(&v7, &json!({"version": "v4", "format": "compact"}))
+                .is_err()
+        );
+
+        let t = reg.generate("template", &json!({"template": "acme-{word}-{digits:4}"})).unwrap();
+        assert!(t.starts_with("acme-"), "{t}");
+        let digits = t.rsplit('-').next().unwrap();
+        assert!(digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit()), "{t}");
+        let g = reg.get("template").unwrap();
+        let bits = g.entropy_bits(&json!({"template": "acme-{word}-{digits:4}"}));
+        assert!((bits - (1295f64.log2() + 4.0 * 10f64.log2())).abs() < 0.01, "{bits}");
+        assert!(reg.generate("template", &json!({"template": "{hex:32}"})).is_err(), "length cap");
+        for bad in ["acme", "ACME-{word}", "{nope}", "x-{word", "a b{word}", "{word:3}"] {
+            assert!(reg.generate("template", &json!({"template": bad})).is_err(), "{bad} accepted");
+        }
+        // Adjacent words still validate thanks to backtracking.
+        let s = reg.generate("template", &json!({"template": "{word}{word}"})).unwrap();
+        g.validate(&s, &json!({"template": "{word}{word}"})).unwrap();
     }
 
     #[test]

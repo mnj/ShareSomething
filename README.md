@@ -53,8 +53,9 @@ Most "secret sharing" tools use one setting for everything. ShareSomething lets 
   *Go now* and *Stay here* buttons.
 
 **Links**
-- Pluggable link styles: `k7m2qx9d`, `monkey-space-sun-earth`, `bafoki-turesa`, or your own
-  `wifi-guest`. Each comes with a "how guessable is this" hint.
+- Pluggable link styles: short code (`k7m2qx9d`), words (`monkey-space-sun-earth`),
+  pronounceable (`bafoki-turesa`), GUID (`3f2b6c1e-…`), template (`acme-{word}-{digits:4}` gives
+  `acme-otter-4821`) or your own `wifi-guest`. Each comes with a "how guessable is this" hint.
 
 **For you, the owner**
 - Passkeys and/or an authenticator app (TOTP), both set up from the web UI.
