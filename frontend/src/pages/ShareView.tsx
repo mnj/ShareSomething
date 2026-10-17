@@ -1,11 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, ApiError, unwrap, type Schemas, type ShareInfo, type SharePayload } from '../api/client'
 import { CopyButton } from '../components/CopyButton'
 import { ErrorNote } from '../components/ErrorNote'
+import { RecipientBar, RecipientSignIn } from '../components/RecipientSignIn'
 import { decryptPayload, derivePassphraseKeys, keyFromFragment, toB64, unwrapDek, type E2eMeta, type KdfParams } from '../crypto/e2e'
 import { downloadFile, formatBytes, saveBlob, type Progress } from '../lib/files'
+import { AUTH_ERRORS, clearStashedKey, readStashedKey, useRecipient } from '../lib/recipient'
 import { formatRelative } from '../lib/format'
 
 interface Revealed {
@@ -20,13 +22,19 @@ interface Revealed {
 
 export function ShareView() {
   const { slug = '' } = useParams()
-  const [fragmentKey] = useState(() => keyFromFragment(window.location.hash))
+  // After an OIDC round trip the fragment is gone; the key was parked in sessionStorage.
+  const [fragmentKey] = useState(() => keyFromFragment(window.location.hash) ?? readStashedKey(slug))
+  const [params] = useSearchParams()
+  const [authError] = useState(() => params.get('auth_error'))
+  const recipient = useRecipient()
   const [revealed, setRevealedState] = useState<Revealed | null>(null)
   const setRevealed = (r: Revealed) => {
     // The key is useless now; drop it from the address bar so it doesn't linger in history.
     history.replaceState(null, '', window.location.pathname)
+    clearStashedKey(slug)
     setRevealedState(r)
   }
+  const emails = [...new Set(recipient.data?.identities.map((i) => i.email) ?? [])]
   const info = useQuery({
     queryKey: ['share-info', slug],
     queryFn: () => unwrap(api.GET('/api/s/{slug}', { params: { path: { slug } } })),
@@ -34,7 +42,14 @@ export function ShareView() {
     enabled: !revealed,
   })
 
-  if (revealed) return <RevealedView r={revealed} />
+  const bar = <RecipientBar emails={emails} />
+  if (revealed)
+    return (
+      <>
+        {bar}
+        <RevealedView r={revealed} />
+      </>
+    )
   if (info.isPending) return <p className="hint">Loading…</p>
   if (info.error) {
     if (info.error instanceof ApiError && info.error.status === 404) {
@@ -44,7 +59,13 @@ export function ShareView() {
     }
     return <ErrorNote error={info.error} />
   }
-  return <Gate info={info.data} fragmentKey={fragmentKey} onRevealed={setRevealed} />
+  return (
+    <div className="stack">
+      {authError && <p className="note note-error narrow">{AUTH_ERRORS[authError] ?? AUTH_ERRORS.failed}</p>}
+      {bar}
+      <Gate info={info.data} fragmentKey={fragmentKey} onRevealed={setRevealed} />
+    </div>
+  )
 }
 
 function Notice({ title, children }: { title: string; children: React.ReactNode }) {
@@ -67,9 +88,9 @@ function Gate({ info, fragmentKey, onRevealed }: { info: ShareInfo; fragmentKey?
 
   switch (info.status) {
     case 'denied':
-      return <Notice title="Access denied">You don't have access to this share from here.</Notice>
+      return <Notice title="Access denied">You don't have access to this share from here, or with the account you're signed in with.</Notice>
     case 'need_auth':
-      return <Notice title="Sign-in required">This share is restricted to specific people. Recipient sign-in isn't available in this version yet.</Notice>
+      return <RecipientSignIn info={info} fragmentKey={fragmentKey} />
     case 'need_owner_login':
       return (
         <Notice title="Owner only">

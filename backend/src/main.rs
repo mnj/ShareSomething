@@ -8,6 +8,7 @@ mod crypto;
 mod db;
 mod error;
 mod jobs;
+mod mailer;
 mod net;
 mod shares;
 mod slug;

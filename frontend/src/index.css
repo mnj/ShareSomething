@@ -478,3 +478,19 @@ span.note-error {
 .progress.small {
   width: 120px;
 }
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+.recipient-bar {
+  justify-content: center;
+}

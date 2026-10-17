@@ -72,6 +72,128 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recipient/email/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for a one-time code by email. Always answers the same way, whether or not a code was
+         *     actually sent, so it can't be used to discover which addresses have access.
+         */
+        post: operations["recipient_email_start"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipient/email/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm an emailed code; on success the email is added to the visitor's identities. */
+        post: operations["recipient_email_verify"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipient/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Forget all of the visitor's identities. */
+        post: operations["recipient_logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipient/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The visitor's verified identities. */
+        get: operations["recipient_me"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipient/methods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sign-in methods available to recipients. */
+        get: operations["recipient_methods"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipient/oidc/{provider}/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Provider redirects back here; on success the verified email(s) join the visitor's identities. */
+        get: operations["oidc_callback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipient/oidc/{provider}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Start signing in with a provider (redirects to it). */
+        get: operations["oidc_start"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/s/{slug}": {
         parameters: {
             query?: never;
@@ -266,6 +388,11 @@ export interface components {
         };
         /** @enum {string} */
         AccessStatus: "ready" | "need_passphrase" | "need_owner_login" | "need_owner_mfa" | "need_auth" | "denied";
+        AuthMethodInfo: {
+            /** @description `email_otp` or `oidc:<provider>`; matches policy rule `methods`. */
+            id: string;
+            label: string;
+        };
         Choice: {
             label: string;
             value: string;
@@ -310,6 +437,18 @@ export interface components {
             secret?: boolean;
             value: string;
         };
+        EmailStartRequest: {
+            email: string;
+            /** @description The share being opened; a code is only sent if this email could get access to it. */
+            slug: string;
+        };
+        EmailStartResponse: {
+            challenge_id: string;
+        };
+        EmailVerifyRequest: {
+            challenge_id: string;
+            code: string;
+        };
         /** @enum {string} */
         EncMode: "e2e" | "server";
         ErrorBody: {
@@ -347,6 +486,10 @@ export interface components {
             options: components["schemas"]["OptionField"][];
             /** @description The slug text itself comes from the user (e.g. vanity slugs) rather than randomness. */
             user_supplied: boolean;
+        };
+        IdentityInfo: {
+            email: string;
+            method: string;
         };
         LoginRequest: {
             password: string;
@@ -425,6 +568,9 @@ export interface components {
             entropy_bits: number;
             slug: string;
             url: string;
+        };
+        RecipientMe: {
+            identities: components["schemas"]["IdentityInfo"][];
         };
         Rule: {
             /** @enum {string} */
@@ -662,6 +808,172 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
+            };
+        };
+    };
+    recipient_email_start: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailStartRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailStartResponse"];
+                };
+            };
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    recipient_email_verify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailVerifyRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipientMe"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    recipient_logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipientMe"];
+                };
+            };
+        };
+    };
+    recipient_me: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipientMe"];
+                };
+            };
+        };
+    };
+    recipient_methods: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthMethodInfo"][];
+                };
+            };
+        };
+    };
+    oidc_callback: {
+        parameters: {
+            query?: {
+                code?: string | null;
+                state?: string | null;
+                error?: string | null;
+            };
+            header?: never;
+            path: {
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Back to the share */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    oidc_start: {
+        parameters: {
+            query?: {
+                /** @description Path to return to after signing in, e.g. `/s/my-share`. */
+                next?: string | null;
+            };
+            header?: never;
+            path: {
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to the identity provider */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

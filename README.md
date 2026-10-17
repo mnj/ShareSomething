@@ -1,11 +1,13 @@
 # ShareSomething
 
-Self-hosted sharing of text, links and credentials, where **every share gets its own security
-settings** instead of one global setting.
+Self-hosted sharing of text, links, credentials and files, where **every share gets its own
+security settings** instead of one global setting.
 
 - Move an API key between your own PCs: **only me**, behind password + fresh TOTP, read once.
 - Send a Wi-Fi password to a guest: short link `/s/wifi-guest`, passphrase told in person, expires tonight.
 - Share a doc link with your team: anyone from the office IP range, unlimited views, for 30 days.
+- Send contract PDFs to a client: anyone `@client.com` who confirms an emailed code or signs in
+  with Google, three downloads, one week.
 
 ## Features
 
@@ -15,8 +17,12 @@ settings** instead of one global setting.
   - *Server-side*: per-share key wrapped with a master key, with the passphrase optionally mixed in.
 - **Burn after reading / N views and expiry.** Content is wiped, not just hidden. Link previews from
   chat apps can't burn a share, because opening needs an explicit *Reveal*.
+- **File shares**: drag & drop several files. Each is encrypted in 1 MiB chunks, in the browser (E2E)
+  or on the server. A read-once share burns on open, and the recipient keeps a one-hour download window.
 - **Access policies**, modelled on Cloudflare Access: *Allow if* (any) / *Require* (all) / *Block if*
   rules on everyone, owner, IP/CIDR, country, email and email domain.
+- **Recipient sign-in** for email and domain rules: an emailed one-time code, or OIDC (Google, Microsoft,
+  Keycloak, Authentik, ...) and GitHub. A rule can require a specific method.
 - **Owner MFA per share**: require a fresh authenticator code to open a specific share.
 - **Pluggable link styles**: `k7m2qx9d`, `monkey-space-sun-earth`, `bafoki-turesa`, or your own
   `wifi-guest`, with an entropy hint for each.
@@ -68,7 +74,12 @@ Environment variables (`SS_*`) or a TOML file (`--config`). See
 | `SS_PROXY__MODE` | `none`, `cloudflare` (CF-Connecting-IP) or `forwarded` (X-Forwarded-For) |
 | `SS_PROXY__TRUSTED_PROXIES` | CIDRs allowed to set those headers, e.g. the tunnel's docker network |
 | `SS_MASTER_KEY` | Base64 32-byte key for server-side encryption (otherwise generated in `/data/master.key`) |
-| `SS_DATA_DIR` | Where the SQLite database lives (`/data` in the image) |
+| `SS_DATA_DIR` | Where the SQLite database and file blobs live (`/data` in the image) |
+| `SS_EMAIL__MODE` | `disabled`, `log` (dev) or `smtp`, plus `SS_EMAIL__SMTP_HOST`, `..._USERNAME`, `..._PASSWORD`, `SS_EMAIL__FROM` |
+| `SS_OIDC` | Sign-in providers, e.g. `[{id="google",name="Google",issuer="https://accounts.google.com",client_id="…",client_secret="…"}]` |
+
+For each OIDC/GitHub provider, register the redirect URI
+`<SS_BASE_URL>/api/recipient/oidc/<id>/callback`.
 
 **Back up `/data`**, including `master.key` if you didn't set `SS_MASTER_KEY`. Without the master key,
 server-mode shares can't be decrypted. E2E shares never depend on it.
@@ -82,6 +93,11 @@ server-mode shares can't be decrypted. E2E shares never depend on it.
   bypassed by spoofing `X-Forwarded-For`.
 - Owner sessions use HttpOnly, SameSite=Strict cookies plus an Origin check. TOTP codes can't be replayed.
 - Strict CSP, `Referrer-Policy: no-referrer`, and `Cache-Control: no-store` on all API responses.
+- Recipient sign-in only ever proves an email address. Email codes are sent only to addresses
+  that could pass the share's rules, and the response never reveals which those are. OIDC uses
+  PKCE, a nonce and browser-bound state, and only provider-verified emails count.
+- File chunks are bound to their position (file, index, last chunk) by the AEAD, so they can't be
+  reordered or truncated without detection.
 
 ## Development
 
@@ -99,6 +115,5 @@ See [AGENTS.md](AGENTS.md) for the architecture, invariants and how to extend th
 
 ## Roadmap
 
-- File shares (chunked encrypted upload and download)
-- Recipient sign-in: email one-time code for email/domain rules, OIDC (Google, GitHub, Microsoft, generic)
 - Passkeys for the owner, reusable policy templates
+- Streaming downloads for multi-GB files (today a file is assembled in browser memory)

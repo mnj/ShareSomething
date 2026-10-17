@@ -18,10 +18,13 @@ chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 hkdf = "0.12"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls-tls", "hostname"] }
 ipnet = "2"
 mime_guess = "2"
+openidconnect = "4"
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rpassword = "7"
 rust-embed = "8"
 serde = { version = "1", features = ["derive"] }
@@ -42,6 +45,7 @@ utoipa-axum = "0.2"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+chrono = "0.4"
 futures = "0.3"
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }

@@ -20,6 +20,14 @@ retention_days = 7
 # Wrong passphrase attempts before a share is destroyed.
 max_passphrase_attempts = 10
 
+# File shares
+max_upload_bytes = 1073741824   # total per share (1 GiB); recipients download into browser memory
+max_files = 100
+download_ttl_mins = 60          # how long a recipient can keep downloading after opening
+
+# How long a recipient stays signed in after an email code / OIDC login.
+recipient_session_hours = 12
+
 [proxy]
 # none       - use the TCP peer address (app exposed directly)
 # cloudflare - trust CF-Connecting-IP / CF-IPCountry (cloudflared tunnel or Cloudflare proxy)
@@ -35,3 +43,42 @@ enabled = []
 default = "shortcode"
 # Optional wordlist (one lowercase a-z word per line, at least 256) for the "words" style.
 # words_file = "/data/words.txt"
+
+# Email one-time codes for recipients (policy rules "Emails" / "Email domain").
+[email]
+mode = "disabled"            # disabled | log (codes go to the server log; dev only) | smtp
+from = "ShareSomething <share@example.com>"
+smtp_host = "smtp.example.com"
+smtp_port = 587
+smtp_tls = "starttls"        # starttls | tls | none
+smtp_username = "share@example.com"
+smtp_password = ""
+
+# Recipient sign-in providers. Redirect URI to register with each provider:
+#   <base_url>/api/recipient/oidc/<id>/callback
+# Policy rules can require a specific one ("oidc:<id>") or accept any.
+# Via env: SS_OIDC='[{id="google",name="Google",issuer="https://accounts.google.com",client_id="…",client_secret="…"}]'
+
+# [[oidc]]
+# id = "google"
+# name = "Google"
+# issuer = "https://accounts.google.com"
+# client_id = ""
+# client_secret = ""
+
+# [[oidc]]
+# id = "microsoft"
+# name = "Microsoft"
+# issuer = "https://login.microsoftonline.com/<tenant-id>/v2.0"
+# client_id = ""
+# client_secret = ""
+# scopes = ["email", "profile"]
+# # Entra ID often omits email_verified; only enable this for a tenant you control.
+# trust_unverified_email = true
+
+# [[oidc]]
+# id = "github"
+# name = "GitHub"
+# kind = "github"             # OAuth app; uses the account's verified emails
+# client_id = ""
+# client_secret = ""

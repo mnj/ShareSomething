@@ -38,6 +38,8 @@ impl Drop for TempDir {
     }
 }
 
+type Sent = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
 struct Resp {
     status: StatusCode,
     body: Value,
@@ -50,6 +52,16 @@ impl TestApp {
     }
 
     async fn with_config(f: impl FnOnce(&mut Config)) -> Self {
+        Self::build(f, None).await
+    }
+
+    /// App whose outgoing email is captured in memory.
+    async fn with_email(f: impl FnOnce(&mut Config)) -> (Self, Sent) {
+        let sent = Sent::default();
+        (Self::build(f, Some(crate::mailer::Mailer::Capture(sent.clone()))).await, sent)
+    }
+
+    async fn build(f: impl FnOnce(&mut Config), mailer: Option<crate::mailer::Mailer>) -> Self {
         let dir = std::env::temp_dir().join(format!("ss-test-{}", uuid::Uuid::new_v4()));
         let mut cfg = Config {
             data_dir: dir.clone(),
@@ -65,7 +77,10 @@ impl TestApp {
             .execute(&db)
             .await
             .unwrap();
-        let state = AppState::new(cfg, db, MasterKey::new([42; 32])).unwrap();
+        let mut state = AppState::new(cfg, db, MasterKey::new([42; 32])).unwrap();
+        if let Some(m) = mailer {
+            state.set_mailer(m);
+        }
         Self {
             app: crate::api::router(state.clone()),
             state,
@@ -75,6 +90,19 @@ impl TestApp {
     }
 
     async fn req(&self, method: &str, uri: &str, body: Option<Value>, cookie: Option<&str>, peer: &str, extra: &[(&str, &str)]) -> Resp {
+        self.req_full(method, uri, body, cookie, peer, extra).await.0
+    }
+
+    /// Like `req`, also returning response headers (for redirects and cookies).
+    async fn req_full(
+        &self,
+        method: &str,
+        uri: &str,
+        body: Option<Value>,
+        cookie: Option<&str>,
+        peer: &str,
+        extra: &[(&str, &str)],
+    ) -> (Resp, axum::http::HeaderMap) {
         let mut b = Request::builder().method(method).uri(uri);
         if !extra.iter().any(|(k, _)| k.eq_ignore_ascii_case("origin")) {
             b = b.header(header::ORIGIN, ORIGIN);
@@ -96,13 +124,13 @@ impl TestApp {
             .insert(ConnectInfo(format!("{peer}:5000").parse::<SocketAddr>().unwrap()));
         let res = self.app.clone().oneshot(req).await.unwrap();
         let status = res.status();
-        let cookie = res
-            .headers()
+        let headers = res.headers().clone();
+        let cookie = headers
             .get(header::SET_COOKIE)
             .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_string());
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
         let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        Resp { status, body, cookie }
+        (Resp { status, body, cookie }, headers)
     }
 
     async fn get(&self, uri: &str, cookie: Option<&str>) -> Resp {
@@ -490,6 +518,18 @@ async fn openapi_and_health() {
     ] {
         assert!(spec["paths"].get(p).is_some(), "missing {p}");
     }
+    // Duplicate operation ids make openapi-typescript merge unrelated endpoints' types.
+    let mut ids: Vec<&str> = spec["paths"]
+        .as_object()
+        .unwrap()
+        .values()
+        .flat_map(|p| p.as_object().unwrap().values())
+        .filter_map(|op| op["operationId"].as_str())
+        .collect();
+    let n = ids.len();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), n, "duplicate operationId in OpenAPI spec");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -741,4 +781,400 @@ async fn e2e_file_share_stores_opaque_chunks_and_revoke_deletes_them() {
         )
         .await;
     assert_eq!(st, StatusCode::FORBIDDEN, "revoke kills outstanding downloads");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Recipient sign-in
+// ---------------------------------------------------------------------------------------------
+
+fn domain_share(domain: &str, methods: Value) -> Value {
+    let mut b = public_text("for the team");
+    b["policy"] = json!([{"group": "include", "type": "email_domain", "domains": [domain], "methods": methods}]);
+    b
+}
+
+/// Waits for the background send task and returns the code mailed to `to`.
+async fn mailed_code(sent: &Sent, to: &str) -> Option<String> {
+    for _ in 0..50 {
+        if let Some((_, body)) = sent.lock().unwrap().iter().find(|(t, _)| t == to) {
+            return body
+                .split_whitespace()
+                .find(|w| w.len() == 6 && w.bytes().all(|b| b.is_ascii_digit()))
+                .map(String::from);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    None
+}
+
+#[tokio::test]
+async fn email_otp_unlocks_domain_share() {
+    let (t, sent) = TestApp::with_email(|_| {}).await;
+    let c = t.login().await;
+    let share = t.create(&c, domain_share("acme.com", json!([]))).await;
+    let slug = share["slug"].as_str().unwrap();
+
+    let info = t.get(&format!("/api/s/{slug}"), None).await;
+    assert_eq!(info.body["status"], "need_auth");
+    assert_eq!(info.body["auth_methods"], json!(["email_otp"]));
+    assert!(info.body["title"].is_null());
+
+    // Not an allowed address: same answer, but nothing is sent.
+    let r = t
+        .post("/api/recipient/email/start", json!({"slug": slug, "email": "eve@evil.com"}), None)
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.body["challenge_id"].is_string());
+    assert!(mailed_code(&sent, "eve@evil.com").await.is_none());
+
+    let r = t
+        .post(
+            "/api/recipient/email/start",
+            json!({"slug": slug, "email": " Alice@ACME.com "}),
+            None,
+        )
+        .await;
+    let challenge = r.body["challenge_id"].as_str().unwrap().to_string();
+    let code = mailed_code(&sent, "alice@acme.com").await.expect("code mailed");
+
+    let wrong = if code == "000000" { "111111" } else { "000000" };
+    let r = t
+        .post(
+            "/api/recipient/email/verify",
+            json!({"challenge_id": challenge, "code": wrong}),
+            None,
+        )
+        .await;
+    assert_eq!(
+        (r.status, r.body["error"].as_str()),
+        (StatusCode::UNAUTHORIZED, Some("invalid_code"))
+    );
+    let r = t
+        .post(
+            "/api/recipient/email/verify",
+            json!({"challenge_id": challenge, "code": code}),
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["identities"][0]["email"], "alice@acme.com");
+    let rc = r.cookie.expect("recipient cookie");
+    assert!(rc.starts_with("ss_recipient="));
+    // A code works once.
+    let r = t
+        .post(
+            "/api/recipient/email/verify",
+            json!({"challenge_id": challenge, "code": code}),
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+
+    assert_eq!(t.get(&format!("/api/s/{slug}"), Some(&rc)).await.body["status"], "ready");
+    let open = t.post(&format!("/api/s/{slug}/open"), json!({}), Some(&rc)).await;
+    assert_eq!(open.body["payload"]["text"], "for the team");
+    let log = t.get(&format!("/api/shares/{}/log", share["id"].as_str().unwrap()), Some(&c)).await;
+    assert_eq!(log.body[0]["identity"], "alice@acme.com");
+
+    let r = t.post("/api/recipient/logout", json!({}), Some(&rc)).await;
+    assert_eq!(r.body["identities"], json!([]));
+    assert_eq!(t.get(&format!("/api/s/{slug}"), Some(&rc)).await.body["status"], "need_auth");
+}
+
+#[tokio::test]
+async fn email_otp_attempt_limit_and_rate_limit() {
+    let (t, sent) = TestApp::with_email(|_| {}).await;
+    let c = t.login().await;
+    let slug = t.create(&c, domain_share("acme.com", json!(["email_otp"]))).await["slug"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = t
+        .post("/api/recipient/email/start", json!({"slug": slug, "email": "bob@acme.com"}), None)
+        .await;
+    let challenge = r.body["challenge_id"].as_str().unwrap().to_string();
+    let code = mailed_code(&sent, "bob@acme.com").await.unwrap();
+    let wrong = if code == "000000" { "111111" } else { "000000" };
+    for _ in 0..5 {
+        t.post(
+            "/api/recipient/email/verify",
+            json!({"challenge_id": challenge, "code": wrong}),
+            None,
+        )
+        .await;
+    }
+    let r = t
+        .post(
+            "/api/recipient/email/verify",
+            json!({"challenge_id": challenge, "code": code}),
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED, "correct code refused after too many attempts");
+
+    // Per-address send limit.
+    for _ in 0..2 {
+        t.post("/api/recipient/email/start", json!({"slug": slug, "email": "bob@acme.com"}), None)
+            .await;
+    }
+    let r = t
+        .post("/api/recipient/email/start", json!({"slug": slug, "email": "bob@acme.com"}), None)
+        .await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn identity_rules_need_a_configured_method() {
+    let t = TestApp::new().await; // no email, no OIDC
+    let c = t.login().await;
+    let r = t.post("/api/shares", domain_share("acme.com", json!([])), Some(&c)).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.body);
+    let (t, _) = TestApp::with_email(|_| {}).await;
+    let c = t.login().await;
+    let r = t
+        .post("/api/shares", domain_share("acme.com", json!(["oidc:nope"])), Some(&c))
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        t.get("/api/recipient/methods", None).await.body,
+        json!([{"id": "email_otp", "label": "Email code"}])
+    );
+}
+
+/// Minimal OpenID provider + GitHub OAuth endpoints for tests.
+mod mock_idp {
+    use std::sync::{Arc, OnceLock};
+
+    use axum::{
+        Form, Json, Router,
+        extract::State,
+        http::HeaderMap,
+        routing::{get, post},
+    };
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use openidconnect::{
+        Audience, EmptyAdditionalClaims, EndUserEmail, IssuerUrl, Nonce, PrivateSigningKey, StandardClaims, SubjectIdentifier,
+        core::{CoreIdToken, CoreIdTokenClaims, CoreJsonWebKeySet, CoreJwsSigningAlgorithm, CoreRsaPrivateSigningKey},
+    };
+    use serde_json::{Value, json};
+
+    const KEY: &str = include_str!("testdata/oidc_test_key.pem");
+
+    pub struct Mock {
+        pub base: OnceLock<String>,
+    }
+
+    /// The authorization "code" the test hands to the callback: it tells the mock what to put in the ID token.
+    pub fn code(email: &str, nonce: &str, verified: bool) -> String {
+        URL_SAFE_NO_PAD.encode(format!("{email}|{nonce}|{verified}"))
+    }
+
+    fn key() -> CoreRsaPrivateSigningKey {
+        CoreRsaPrivateSigningKey::from_pem(KEY, None).unwrap()
+    }
+
+    pub async fn spawn() -> String {
+        let mock = Arc::new(Mock { base: OnceLock::new() });
+        let app = Router::new()
+            .route("/.well-known/openid-configuration", get(discovery))
+            .route(
+                "/jwks",
+                get(|| async { Json(CoreJsonWebKeySet::new(vec![key().as_verification_key()])) }),
+            )
+            .route("/token", post(token))
+            .route(
+                "/login/oauth/access_token",
+                post(|| async { Json(json!({"access_token": "gho_test", "token_type": "bearer"})) }),
+            )
+            .route("/user/emails", get(github_emails))
+            .with_state(mock.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        mock.base.set(base.clone()).unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        base
+    }
+
+    async fn discovery(State(m): State<Arc<Mock>>) -> Json<Value> {
+        let b = m.base.get().unwrap();
+        Json(json!({
+            "issuer": b,
+            "authorization_endpoint": format!("{b}/authorize"),
+            "token_endpoint": format!("{b}/token"),
+            "jwks_uri": format!("{b}/jwks"),
+            "response_types_supported": ["code"],
+            "subject_types_supported": ["public"],
+            "id_token_signing_alg_values_supported": ["RS256"],
+        }))
+    }
+
+    async fn token(State(m): State<Arc<Mock>>, Form(form): Form<std::collections::HashMap<String, String>>) -> Json<Value> {
+        assert!(form.contains_key("code_verifier"), "PKCE verifier must be sent");
+        let decoded = String::from_utf8(URL_SAFE_NO_PAD.decode(&form["code"]).unwrap()).unwrap();
+        let mut parts = decoded.split('|');
+        let (email, nonce, verified) = (parts.next().unwrap(), parts.next().unwrap(), parts.next().unwrap() == "true");
+        let now = chrono::Utc::now();
+        let claims = CoreIdTokenClaims::new(
+            IssuerUrl::new(m.base.get().unwrap().clone()).unwrap(),
+            vec![Audience::new("client-id".into())],
+            now + chrono::Duration::minutes(5),
+            now,
+            StandardClaims::new(SubjectIdentifier::new("user-1".into()))
+                .set_email(Some(EndUserEmail::new(email.into())))
+                .set_email_verified(Some(verified)),
+            EmptyAdditionalClaims {},
+        )
+        .set_nonce(Some(Nonce::new(nonce.into())));
+        let id_token = CoreIdToken::new(claims, &key(), CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256, None, None).unwrap();
+        Json(json!({"access_token": "at", "token_type": "Bearer", "expires_in": 300, "id_token": id_token.to_string()}))
+    }
+
+    async fn github_emails(headers: HeaderMap) -> Json<Value> {
+        assert_eq!(headers.get("authorization").unwrap(), "Bearer gho_test");
+        Json(json!([
+            {"email": "Dev@Acme.com", "verified": true, "primary": true},
+            {"email": "spoof@other.com", "verified": false, "primary": false},
+        ]))
+    }
+}
+
+fn query_param(url: &str, name: &str) -> Option<String> {
+    url::Url::parse(url)
+        .ok()?
+        .query_pairs()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.into_owned())
+}
+
+async fn oidc_app() -> (TestApp, String) {
+    let idp = mock_idp::spawn().await;
+    let issuer = idp.clone();
+    let t = TestApp::with_config(move |c| {
+        c.oidc = vec![
+            crate::config::OidcProviderConfig {
+                id: "mock".into(),
+                name: "Mock IdP".into(),
+                kind: crate::config::OidcKind::Oidc,
+                issuer: Some(issuer.clone()),
+                client_id: "client-id".into(),
+                client_secret: "secret".into(),
+                scopes: vec![],
+                trust_unverified_email: false,
+                github_web_url: None,
+                github_api_url: None,
+            },
+            crate::config::OidcProviderConfig {
+                id: "gh".into(),
+                name: "GitHub".into(),
+                kind: crate::config::OidcKind::Github,
+                issuer: None,
+                client_id: "gh-client".into(),
+                client_secret: "gh-secret".into(),
+                scopes: vec![],
+                trust_unverified_email: false,
+                github_web_url: Some(issuer.clone()),
+                github_api_url: Some(issuer),
+            },
+        ]
+    })
+    .await;
+    (t, idp)
+}
+
+/// Runs start → (IdP) → callback and returns (callback Location, recipient cookie).
+async fn sign_in(t: &TestApp, provider: &str, next: &str, email: &str, verified: bool) -> (String, Option<String>) {
+    let (r, h) = t
+        .req_full(
+            "GET",
+            &format!("/api/recipient/oidc/{provider}/start?next={next}"),
+            None,
+            None,
+            "198.51.100.1",
+            &[],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    let to = h.get(header::LOCATION).unwrap().to_str().unwrap().to_string();
+    let state_cookie = r.cookie.unwrap();
+    let state = query_param(&to, "state").unwrap();
+    assert_eq!(query_param(&to, "code_challenge_method").as_deref(), Some("S256"));
+    let code = match query_param(&to, "nonce") {
+        Some(nonce) => mock_idp::code(email, &nonce, verified),
+        None => "github-code".into(),
+    };
+    let (r, h) = t
+        .req_full(
+            "GET",
+            &format!("/api/recipient/oidc/{provider}/callback?code={code}&state={state}"),
+            None,
+            Some(&state_cookie),
+            "198.51.100.1",
+            &[],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    let cookie = h
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_string())
+        .find(|c| c.starts_with("ss_recipient="));
+    (h.get(header::LOCATION).unwrap().to_str().unwrap().to_string(), cookie)
+}
+
+#[tokio::test]
+async fn oidc_sign_in_unlocks_share() {
+    let (t, _) = oidc_app().await;
+    let c = t.login().await;
+    let slug = t.create(&c, domain_share("acme.com", json!(["oidc:mock"]))).await["slug"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let info = t.get(&format!("/api/s/{slug}"), None).await;
+    assert_eq!(info.body["auth_methods"], json!(["oidc:mock"]));
+
+    let (to, cookie) = sign_in(&t, "mock", &format!("/s/{slug}"), "Carol@acme.com", true).await;
+    assert_eq!(to, format!("/s/{slug}"));
+    let cookie = cookie.expect("signed in");
+    assert_eq!(t.get(&format!("/api/s/{slug}"), Some(&cookie)).await.body["status"], "ready");
+    let me = t.get("/api/recipient/me", Some(&cookie)).await;
+    assert_eq!(me.body["identities"], json!([{"email": "carol@acme.com", "method": "oidc:mock"}]));
+}
+
+#[tokio::test]
+async fn oidc_rejects_unverified_email_bad_state_and_open_redirects() {
+    let (t, _) = oidc_app().await;
+    let (to, cookie) = sign_in(&t, "mock", "/s/x", "mallory@acme.com", false).await;
+    assert_eq!(to, "/s/x?auth_error=no_verified_email");
+    assert!(cookie.is_none());
+
+    let (to, _) = sign_in(&t, "mock", "//evil.example/x", "a@acme.com", true).await;
+    assert_eq!(to, "/", "external next is replaced");
+
+    // A callback without the browser-bound state cookie is refused (login CSRF).
+    let (r, h) = t
+        .req_full("GET", "/api/recipient/oidc/mock/start?next=/s/y", None, None, "198.51.100.1", &[])
+        .await;
+    let state = query_param(h.get(header::LOCATION).unwrap().to_str().unwrap(), "state").unwrap();
+    drop(r);
+    let (_, h) = t
+        .req_full(
+            "GET",
+            &format!("/api/recipient/oidc/mock/callback?code=x&state={state}"),
+            None,
+            None,
+            "198.51.100.1",
+            &[],
+        )
+        .await;
+    assert_eq!(h.get(header::LOCATION).unwrap(), "/?auth_error=expired");
+    assert_eq!(t.get("/api/recipient/oidc/unknown/start", None).await.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn github_sign_in_uses_verified_emails_only() {
+    let (t, _) = oidc_app().await;
+    let (to, cookie) = sign_in(&t, "gh", "/s/z", "", true).await;
+    assert_eq!(to, "/s/z");
+    let me = t.get("/api/recipient/me", Some(&cookie.unwrap())).await;
+    assert_eq!(me.body["identities"], json!([{"email": "dev@acme.com", "method": "oidc:gh"}]));
 }

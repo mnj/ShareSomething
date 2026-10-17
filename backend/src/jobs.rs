@@ -59,10 +59,12 @@ pub async fn sweep(state: &AppState) -> sqlx::Result<()> {
         sqlx::query("DELETE FROM shares WHERE id = ?").bind(id).execute(&state.db).await?;
         state.blobs.remove_share(id).await;
     }
-    sqlx::query("DELETE FROM owner_sessions WHERE expires_at <= ?")
-        .bind(t)
-        .execute(&state.db)
-        .await?;
+    for table in ["owner_sessions", "recipient_sessions", "email_challenges", "oidc_states"] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE expires_at <= ?"))
+            .bind(t)
+            .execute(&state.db)
+            .await?;
+    }
     if wiped + purge.len() as u64 > 0 {
         tracing::info!(wiped, purged = purge.len(), "sweeper ran");
     }

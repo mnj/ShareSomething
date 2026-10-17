@@ -7,6 +7,8 @@ export interface RuleRow {
   group: Schemas['RuleGroup']
   type: RuleType
   values: string
+  /** Email/domain rules: required sign-in method id, '' = any configured method. */
+  method?: string
 }
 
 function splitList(s: string): string[] {
@@ -17,8 +19,9 @@ function splitList(s: string): string[] {
 }
 
 export function rowsToPolicy(rows: RuleRow[]): PolicyRule[] {
-  return rows.map(({ group, type, values }): PolicyRule => {
+  return rows.map(({ group, type, values, method }): PolicyRule => {
     const list = splitList(values)
+    const methods = method ? [method] : []
     switch (type) {
       case 'everyone':
       case 'owner':
@@ -28,9 +31,9 @@ export function rowsToPolicy(rows: RuleRow[]): PolicyRule[] {
       case 'country':
         return { group, type, countries: list }
       case 'email':
-        return { group, type, emails: list }
+        return { group, type, emails: list, methods }
       case 'email_domain':
-        return { group, type, domains: list }
+        return { group, type, domains: list, methods }
     }
   })
 }

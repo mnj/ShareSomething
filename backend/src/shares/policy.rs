@@ -256,6 +256,21 @@ fn need_auth(methods: Vec<Vec<String>>) -> Decision {
     Decision::NeedRecipientAuth(all)
 }
 
+/// Whether proving ownership of `email` via `method` could get a visitor past this policy's
+/// identity rules. Used to decide whether sending a one-time code makes sense at all.
+pub fn email_could_satisfy(rules: &[PolicyRule], email: &str, method: &str) -> bool {
+    let allows = |methods: &[String]| methods.is_empty() || methods.iter().any(|m| m == method);
+    let matches = |rule: &Rule| match rule {
+        Rule::Email { emails, methods } => allows(methods) && emails.iter().any(|e| e == email),
+        Rule::EmailDomain { domains, methods } => {
+            allows(methods) && email.rsplit_once('@').is_some_and(|(_, d)| domains.iter().any(|x| x == d))
+        }
+        _ => false,
+    };
+    let excluded = rules.iter().filter(|r| r.group == RuleGroup::Exclude).any(|r| matches(&r.rule));
+    !excluded && rules.iter().filter(|r| r.group != RuleGroup::Exclude).any(|r| matches(&r.rule))
+}
+
 pub fn evaluate(share: &ShareState, ctx: &AccessContext) -> Decision {
     if !share.available || share.expires_at.is_some_and(|t| t <= ctx.now) || share.max_views.is_some_and(|m| share.views >= m) {
         return Decision::Unavailable;
@@ -493,6 +508,26 @@ mod tests {
     fn owner_auth_wins_over_recipient_auth() {
         let s = share(vec![inc(Rule::Owner), inc(domain("acme.com"))]);
         assert_eq!(evaluate(&s, &anon("1.1.1.1")), Decision::NeedOwnerLogin);
+    }
+
+    #[test]
+    fn email_could_satisfy_checks_rules_and_methods() {
+        let rules = vec![
+            inc(domain("acme.com")),
+            inc(Rule::Email {
+                emails: vec!["bob@x.org".into()],
+                methods: vec!["oidc:google".into()],
+            }),
+            exc(Rule::Email {
+                emails: vec!["mallory@acme.com".into()],
+                methods: vec![],
+            }),
+        ];
+        assert!(email_could_satisfy(&rules, "alice@acme.com", "email_otp"));
+        assert!(!email_could_satisfy(&rules, "mallory@acme.com", "email_otp"));
+        assert!(!email_could_satisfy(&rules, "bob@x.org", "email_otp"));
+        assert!(email_could_satisfy(&rules, "bob@x.org", "oidc:google"));
+        assert!(!email_could_satisfy(&[inc(Rule::Everyone)], "a@b.c", "email_otp"));
     }
 
     #[test]

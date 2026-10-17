@@ -41,6 +41,9 @@ pub struct RateLimiters {
     pub login: RateLimiter,
     pub lookup: RateLimiter,
     pub open: RateLimiter,
+    pub email_ip: RateLimiter,
+    pub email_addr: RateLimiter,
+    pub email_verify: RateLimiter,
 }
 
 impl Default for RateLimiters {
@@ -49,6 +52,9 @@ impl Default for RateLimiters {
             login: RateLimiter::new(10, Duration::from_secs(300)),
             lookup: RateLimiter::new(120, Duration::from_secs(60)),
             open: RateLimiter::new(30, Duration::from_secs(60)),
+            email_ip: RateLimiter::new(10, Duration::from_secs(600)),
+            email_addr: RateLimiter::new(3, Duration::from_secs(600)),
+            email_verify: RateLimiter::new(20, Duration::from_secs(600)),
         }
     }
 }

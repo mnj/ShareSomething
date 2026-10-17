@@ -1,4 +1,5 @@
 import type { Schemas } from '../api/client'
+import { useAuthMethods } from '../lib/recipient'
 import type { RuleRow, RuleType } from '../lib/policy'
 
 type RuleGroup = Schemas['RuleGroup']
@@ -8,8 +9,8 @@ const TYPES: { type: RuleType; label: string; placeholder?: string; hint?: strin
   { type: 'owner', label: 'Me (owner)' },
   { type: 'ip', label: 'IP / network', placeholder: '203.0.113.0/24, 2001:db8::/32' },
   { type: 'country', label: 'Country', placeholder: 'DK, SE', hint: 'Needs Cloudflare in front (CF-IPCountry).' },
-  { type: 'email', label: 'Emails', placeholder: 'alice@example.com', hint: 'Recipient sign-in (email code / OIDC) is coming in a later version.' },
-  { type: 'email_domain', label: 'Email domain', placeholder: 'example.com', hint: 'Recipient sign-in (email code / OIDC) is coming in a later version.' },
+  { type: 'email', label: 'Emails', placeholder: 'alice@example.com, bob@example.org' },
+  { type: 'email_domain', label: 'Email domain', placeholder: 'example.com' },
 ]
 
 const GROUPS: { group: RuleGroup; label: string }[] = [
@@ -19,6 +20,7 @@ const GROUPS: { group: RuleGroup; label: string }[] = [
 ]
 
 export function PolicyEditor({ rows, onChange }: { rows: RuleRow[]; onChange: (rows: RuleRow[]) => void }) {
+  const methods = useAuthMethods()
   const update = (i: number, patch: Partial<RuleRow>) => onChange(rows.map((r, j) => (i === j ? { ...r, ...patch } : r)))
   return (
     <div className="policy-editor">
@@ -48,6 +50,22 @@ export function PolicyEditor({ rows, onChange }: { rows: RuleRow[]; onChange: (r
             <button type="button" className="btn btn-small btn-ghost" onClick={() => onChange(rows.filter((_, j) => j !== i))} aria-label="Remove rule">
               ✕
             </button>
+            {(row.type === 'email' || row.type === 'email_domain') &&
+              (methods.data?.length ? (
+                <label className="policy-hint field-inline">
+                  Verified with
+                  <select value={row.method ?? ''} onChange={(e) => update(i, { method: e.target.value })}>
+                    <option value="">any sign-in method</option>
+                    {methods.data.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <p className="hint policy-hint note-error">No recipient sign-in is configured on the server (email codes or OIDC), so nobody could pass this rule.</p>
+              ))}
             {meta.hint && <p className="hint policy-hint">{meta.hint}</p>}
           </div>
         )

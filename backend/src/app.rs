@@ -3,9 +3,11 @@ use std::{ops::Deref, sync::Arc};
 use sqlx::SqlitePool;
 
 use crate::{
+    auth::oidc::OidcProviders,
     blobs::Blobs,
     config::Config,
     crypto::MasterKey,
+    mailer::Mailer,
     net::{client_ip::ProxySettings, rate_limit::RateLimiters},
     slug::SlugRegistry,
 };
@@ -21,6 +23,8 @@ pub struct Inner {
     pub proxy: ProxySettings,
     pub limits: RateLimiters,
     pub blobs: Blobs,
+    pub mailer: Mailer,
+    pub oidc: OidcProviders,
 }
 
 impl Deref for AppState {
@@ -34,6 +38,8 @@ impl AppState {
     pub fn new(cfg: Config, db: SqlitePool, master: MasterKey) -> anyhow::Result<Self> {
         let slugs = SlugRegistry::from_config(&cfg.slugs)?;
         let blobs = Blobs::new(&cfg.data_dir);
+        let mailer = Mailer::from_config(&cfg.email)?;
+        let oidc = OidcProviders::new(&cfg.oidc)?;
         let proxy = ProxySettings {
             mode: cfg.proxy.mode,
             trusted: cfg.trusted_proxies()?,
@@ -46,7 +52,14 @@ impl AppState {
             proxy,
             limits: RateLimiters::default(),
             blobs,
+            mailer,
+            oidc,
         })))
+    }
+
+    #[cfg(test)]
+    pub fn set_mailer(&mut self, mailer: crate::mailer::Mailer) {
+        Arc::get_mut(&mut self.0).expect("state not shared yet").mailer = mailer;
     }
 
     pub fn share_url(&self, slug: &str) -> String {

@@ -4,11 +4,12 @@ Guidance for AI coding agents (and humans) working on ShareSomething.
 
 ## What this is
 
-A self-hosted app for sharing text, links, credentials (and later files). Each share has its own
+A self-hosted app for sharing text, links, credentials and files. Each share has its own
 security settings: encryption mode (browser E2E or server-side), passphrase, expiry, view limit
 (read once), owner MFA, and a Cloudflare-Access-style policy (include / require / exclude rules
-on everyone, owner, IP/CIDR, country, email, email domain). There is one owner account; recipients
-are anonymous or (later) authenticated per share.
+on everyone, owner, IP/CIDR, country, email, email domain). There is one owner account. Recipients
+are anonymous, or sign in with an emailed code or an OIDC/GitHub account when a share's rules
+name specific people.
 
 - `backend/`: Rust (axum 0.8, sqlx 0.8 + SQLite, utoipa 5). Single binary that also serves the
   embedded frontend (`rust-embed` of `frontend/dist`).
@@ -44,9 +45,14 @@ built from it and the API rejects non-GET requests whose `Origin` doesn't match 
 | `config.rs` | figment config: defaults < TOML file < `SS_*` env (`__` for nesting) |
 | `api.rs` | router assembly, OpenAPI doc, security headers, CSRF origin check |
 | `auth/owner.rs` | owner login, sessions (cookie `ss_owner`), TOTP step-up; `Owner` extractor |
+| `auth/recipient.rs` | recipient session (cookie `ss_recipient`) with verified identities; email codes; `Recipient` extractor |
+| `auth/oidc.rs` | OIDC (discovery, PKCE, nonce, browser-bound state) and GitHub OAuth sign-in |
+| `mailer.rs` | SMTP / log / disabled mailer for one-time codes |
 | `shares/policy.rs` | **pure** access evaluator `evaluate(ShareState, AccessContext) -> Decision` |
 | `shares/handlers.rs` | owner CRUD + recipient `GET /api/s/{slug}` and `POST /api/s/{slug}/open` |
+| `shares/files.rs` | chunk upload (`x-upload-token`), finalize, chunk download (`x-download-token`) |
 | `shares/store.rs` | SQL for shares, rules, atomic `consume_view`, `wipe`, access log |
+| `blobs.rs` | on-disk chunk storage `data/blobs/<share>/<idx>.bin`, chunk math |
 | `slug/` | pluggable link generators (`SlugGenerator` trait + `SlugRegistry`) |
 | `net/client_ip.rs` | trusted-proxy-aware client IP (`none` / `cloudflare` / `forwarded`) |
 | `crypto.rs` | server-mode envelope encryption (XChaCha20-Poly1305, HKDF, argon2id) |
@@ -75,6 +81,18 @@ Migrations live in `backend/migrations/`. Add a new numbered file; never edit an
 8. The CSP forbids inline scripts. Don't add inline `<script>`, and avoid `style` attributes
    (use classes in `index.css`). `'wasm-unsafe-eval'` exists only for hash-wasm (argon2id).
 9. Links in shared content are rendered only when they are `http(s)` (checked on both server and client).
+10. **File chunks are always encrypted at rest.** In server mode the DEK exists unwrapped only while
+    a request runs. Between requests it is stored wrapped under the upload token (until finalize)
+    or a recipient's download token, never on its own. A file share isn't openable while
+    `upload_pending`.
+11. **Email codes are only sent to addresses that could pass the share's policy**
+    (`policy::email_could_satisfy`), and `email/start` answers identically either way. Don't add
+    responses or timing that reveal which addresses have access.
+12. **OIDC:** keep PKCE, the nonce check, the `ss_oidc_state` cookie binding and `safe_next()`
+    (relative paths only). Only provider-verified emails become identities, unless the provider
+    sets `trust_unverified_email`.
+13. Identity rules may only name sign-in methods the server offers (`validate_policy`), so a share
+    can't be created that nobody is able to open.
 
 ## Common tasks
 
@@ -107,10 +125,16 @@ by older clients must still open.
   formats, and client-IP resolution.
 - Commits go directly on `main` in small, working increments. The message explains the why.
 
-## Roadmap (from the plan)
+## Testing notes
 
-1. ~~Skeleton~~ 2. ~~Text/link/credential shares~~ (done)
-3. Files: chunked (1 MiB) AES-GCM upload and download in both modes, multi-file shares
-4. Recipient auth: email OTP (`lettre`) for email/domain rules, OIDC providers (`openidconnect`)
-   that fill `AccessContext.identities`
-5. Polish: passkeys (`webauthn-rs`), policy templates, finer rate limiting (`tower_governor`)
+- `backend/src/tests.rs` drives the real router: `TestApp::with_email` captures mail, and
+  `mock_idp` is an in-process OpenID provider (RS256 key in `src/testdata/`, test-only) plus
+  GitHub endpoints.
+- Every OpenAPI `operationId` must be unique (there's a test for it). Set `operation_id = "..."`
+  when two modules have handlers with the same function name.
+
+## Roadmap
+
+1. ~~Skeleton~~ 2. ~~Text/link/credential shares~~ 3. ~~Files~~ 4. ~~Recipient sign-in~~ (done)
+5. Polish: passkeys (`webauthn-rs`), policy templates, finer rate limiting (`tower_governor`),
+   streaming downloads for very large files (File System Access API / service worker)

@@ -36,8 +36,94 @@ pub struct Config {
     pub retention_days: i64,
     /// Wrong passphrase attempts before a share is destroyed.
     pub max_passphrase_attempts: i64,
+    /// How long a recipient stays signed in (email code / OIDC).
+    pub recipient_session_hours: i64,
     pub proxy: ProxyConfig,
     pub slugs: SlugConfig,
+    pub email: EmailConfig,
+    /// Sign-in providers for recipients.
+    pub oidc: Vec<OidcProviderConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EmailConfig {
+    pub mode: EmailMode,
+    /// e.g. `ShareSomething <share@example.com>`
+    pub from: String,
+    pub smtp_host: String,
+    pub smtp_port: Option<u16>,
+    pub smtp_username: Option<String>,
+    pub smtp_password: Option<String>,
+    pub smtp_tls: SmtpTls,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EmailMode {
+    /// Email one-time codes are unavailable.
+    Disabled,
+    /// Codes are written to the server log instead of sent (development only).
+    Log,
+    Smtp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SmtpTls {
+    /// STARTTLS, usually port 587.
+    Starttls,
+    /// Implicit TLS, usually port 465.
+    Tls,
+    /// Plain text; only for a relay on localhost.
+    None,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OidcProviderConfig {
+    /// Short id used in URLs and policy rules (`oidc:<id>`), e.g. `google`.
+    pub id: String,
+    /// Button label, e.g. `Google`.
+    pub name: String,
+    #[serde(default)]
+    pub kind: OidcKind,
+    /// OIDC issuer URL (discovery). Not used for `kind = "github"`.
+    pub issuer: Option<String>,
+    pub client_id: String,
+    pub client_secret: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Accept an email the provider doesn't mark as verified (some Microsoft tenants omit
+    /// `email_verified`). Only enable for providers you trust to control email addresses.
+    #[serde(default)]
+    pub trust_unverified_email: bool,
+    /// GitHub endpoint overrides (GitHub Enterprise / tests).
+    #[serde(default)]
+    pub github_web_url: Option<String>,
+    #[serde(default)]
+    pub github_api_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OidcKind {
+    #[default]
+    Oidc,
+    Github,
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self {
+            mode: EmailMode::Disabled,
+            from: "ShareSomething <noreply@localhost>".into(),
+            smtp_host: String::new(),
+            smtp_port: None,
+            smtp_username: None,
+            smtp_password: None,
+            smtp_tls: SmtpTls::Starttls,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,8 +172,11 @@ impl Default for Config {
             download_ttl_mins: 60,
             retention_days: 7,
             max_passphrase_attempts: 10,
+            recipient_session_hours: 12,
             proxy: ProxyConfig::default(),
             slugs: SlugConfig::default(),
+            email: EmailConfig::default(),
+            oidc: vec![],
         }
     }
 }
@@ -147,6 +236,21 @@ impl Config {
             bail!("base_url must be http(s)");
         }
         self.trusted_proxies()?;
+        let mut seen = std::collections::HashSet::new();
+        for p in &self.oidc {
+            if p.id.is_empty() || !p.id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+                bail!("oidc provider id '{}' must be [A-Za-z0-9_-]+", p.id);
+            }
+            if !seen.insert(p.id.clone()) {
+                bail!("duplicate oidc provider id '{}'", p.id);
+            }
+            if p.kind == OidcKind::Oidc && p.issuer.is_none() {
+                bail!("oidc provider '{}' needs an issuer", p.id);
+            }
+        }
+        if self.email.mode == EmailMode::Smtp && self.email.smtp_host.is_empty() {
+            bail!("email.mode = smtp needs email.smtp_host");
+        }
         Ok(())
     }
 

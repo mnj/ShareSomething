@@ -134,6 +134,247 @@
         }
       }
     },
+    "/api/recipient/email/start": {
+      "post": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "Ask for a one-time code by email. Always answers the same way, whether or not a code was\nactually sent, so it can't be used to discover which addresses have access.",
+        "operationId": "recipient_email_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailStartResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/recipient/email/verify": {
+      "post": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "Confirm an emailed code; on success the email is added to the visitor's identities.",
+        "operationId": "recipient_email_verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipientMe"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/recipient/logout": {
+      "post": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "Forget all of the visitor's identities.",
+        "operationId": "recipient_logout",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipientMe"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/recipient/me": {
+      "get": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "The visitor's verified identities.",
+        "operationId": "recipient_me",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipientMe"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/recipient/methods": {
+      "get": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "Sign-in methods available to recipients.",
+        "operationId": "recipient_methods",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuthMethodInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/recipient/oidc/{provider}/callback": {
+      "get": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "Provider redirects back here; on success the verified email(s) join the visitor's identities.",
+        "operationId": "oidc_callback",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Back to the share"
+          }
+        }
+      }
+    },
+    "/api/recipient/oidc/{provider}/start": {
+      "get": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "Start signing in with a provider (redirects to it).",
+        "operationId": "oidc_start",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "next",
+            "in": "query",
+            "description": "Path to return to after signing in, e.g. `/s/my-share`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to the identity provider"
+          }
+        }
+      }
+    },
     "/api/s/{slug}": {
       "get": {
         "tags": [
@@ -802,6 +1043,22 @@
           "denied"
         ]
       },
+      "AuthMethodInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`email_otp` or `oidc:<provider>`; matches policy rule `methods`."
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
       "Choice": {
         "type": "object",
         "required": [
@@ -964,6 +1221,48 @@
           }
         }
       },
+      "EmailStartRequest": {
+        "type": "object",
+        "required": [
+          "slug",
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "description": "The share being opened; a code is only sent if this email could get access to it."
+          }
+        }
+      },
+      "EmailStartResponse": {
+        "type": "object",
+        "required": [
+          "challenge_id"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string"
+          }
+        }
+      },
+      "EmailVerifyRequest": {
+        "type": "object",
+        "required": [
+          "challenge_id",
+          "code"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        }
+      },
       "EncMode": {
         "type": "string",
         "enum": [
@@ -1083,6 +1382,21 @@
           "user_supplied": {
             "type": "boolean",
             "description": "The slug text itself comes from the user (e.g. vanity slugs) rather than randomness."
+          }
+        }
+      },
+      "IdentityInfo": {
+        "type": "object",
+        "required": [
+          "email",
+          "method"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
           }
         }
       },
@@ -1374,6 +1688,20 @@
           },
           "url": {
             "type": "string"
+          }
+        }
+      },
+      "RecipientMe": {
+        "type": "object",
+        "required": [
+          "identities"
+        ],
+        "properties": {
+          "identities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IdentityInfo"
+            }
           }
         }
       },

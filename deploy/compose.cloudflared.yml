@@ -14,6 +14,13 @@ services:
       SS_PROXY__MODE: cloudflare
       # Only cloudflared lives on this network, so only it can set CF-Connecting-IP.
       SS_PROXY__TRUSTED_PROXIES: 172.30.77.0/24
+      # Recipient sign-in (optional): email codes and/or OIDC providers.
+      # SS_EMAIL__MODE: smtp
+      # SS_EMAIL__FROM: ShareSomething <share@example.com>
+      # SS_EMAIL__SMTP_HOST: smtp.example.com
+      # SS_EMAIL__SMTP_USERNAME: share@example.com
+      # SS_EMAIL__SMTP_PASSWORD: ${SMTP_PASSWORD}
+      # SS_OIDC: '[{id="google",name="Google",issuer="https://accounts.google.com",client_id="...",client_secret="..."}]'
     volumes:
       - ss-data:/data
     networks:

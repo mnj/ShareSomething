@@ -17,7 +17,10 @@ use super::{
 };
 use crate::{
     app::AppState,
-    auth::owner::{Owner, owner_has_totp},
+    auth::{
+        owner::{Owner, owner_has_totp},
+        recipient::{Recipient, available_methods},
+    },
     blobs,
     crypto::{self, CryptoError, ServerMeta},
     error::{AppError, AppResult},
@@ -92,7 +95,7 @@ fn validate_file_specs(state: &AppState, kind: ShareKind, files: Option<&[FileSp
     }
 }
 
-fn validate_policy(rules: Vec<PolicyRule>) -> AppResult<Vec<PolicyRule>> {
+fn validate_policy(state: &AppState, rules: Vec<PolicyRule>) -> AppResult<Vec<PolicyRule>> {
     if rules.len() > 50 {
         return Err(AppError::BadRequest("too many policy rules".into()));
     }
@@ -108,6 +111,29 @@ fn validate_policy(rules: Vec<PolicyRule>) -> AppResult<Vec<PolicyRule>> {
     }
     if rules.iter().any(|r| r.rule == Rule::Everyone && r.group != RuleGroup::Include) {
         return Err(AppError::BadRequest("'everyone' only makes sense as an include rule".into()));
+    }
+    // Identity rules must be satisfiable with the sign-in methods this server offers.
+    for r in &rules {
+        let methods = match &r.rule {
+            Rule::Email { methods, .. } | Rule::EmailDomain { methods, .. } => methods,
+            _ => continue,
+        };
+        for m in methods {
+            let offered = match m.strip_prefix("oidc:") {
+                Some(p) => state.oidc.has(p),
+                None => m == "email_otp" && state.mailer.enabled(),
+            };
+            if !offered {
+                return Err(AppError::BadRequest(format!(
+                    "sign-in method '{m}' is not configured on this server"
+                )));
+            }
+        }
+        if methods.is_empty() && available_methods(state).is_empty() {
+            return Err(AppError::BadRequest(
+                "email rules need a recipient sign-in method; configure email codes or an OIDC provider".into(),
+            ));
+        }
     }
     Ok(rules)
 }
@@ -159,7 +185,7 @@ async fn create_share(
 ) -> AppResult<(StatusCode, Json<CreateShareResponse>)> {
     let title = validate_title(req.title)?;
     let file_sizes = validate_file_specs(&state, req.kind, req.files.as_deref())?;
-    let rules = validate_policy(req.policy)?;
+    let rules = validate_policy(&state, req.policy)?;
     validate_mfa_toggle(&state, req.require_owner_mfa).await?;
     if req.max_views.is_some_and(|m| !(1..=MAX_VIEWS).contains(&m)) {
         return Err(AppError::BadRequest(format!("max_views must be 1..{MAX_VIEWS}")));
@@ -360,7 +386,7 @@ async fn update_share(
     Json(req): Json<UpdateShareRequest>,
 ) -> AppResult<Json<ShareSummary>> {
     let row = store::by_id(&state.db, &id).await?.ok_or(AppError::NotFound)?;
-    let policy = req.policy.map(validate_policy).transpose()?;
+    let policy = req.policy.map(|p| validate_policy(&state, p)).transpose()?;
     if let Some(m) = req.require_owner_mfa {
         validate_mfa_toggle(&state, m).await?;
     }
@@ -473,19 +499,27 @@ async fn preview_slug(
 // Recipient API
 // ---------------------------------------------------------------------------------------------
 
-fn access_context(client: &ClientInfo, owner: Option<&Owner>) -> AccessContext {
+fn access_context(client: &ClientInfo, owner: Option<&Owner>, recipient: &Recipient) -> AccessContext {
     AccessContext {
         now: now(),
         ip: client.ip,
         country: client.country.clone(),
         owner: owner.map(|o| OwnerCtx { mfa_at: o.mfa_at }),
-        // Recipient sign-in (email OTP / OIDC) arrives in a later phase.
-        identities: vec![],
+        identities: recipient.identities.clone(),
     }
 }
 
-fn identity_label(owner: Option<&Owner>) -> Option<&'static str> {
-    owner.map(|_| "owner")
+fn identity_label(owner: Option<&Owner>, recipient: &Recipient) -> Option<String> {
+    owner.map(|_| "owner".to_string()).or_else(|| recipient.label())
+}
+
+/// Narrows a rule's acceptable methods (empty = any) to those this server actually offers.
+fn offered_methods(state: &AppState, wanted: &[String]) -> Vec<String> {
+    available_methods(state)
+        .into_iter()
+        .map(|m| m.id)
+        .filter(|id| wanted.is_empty() || wanted.contains(id))
+        .collect()
 }
 
 /// Public part of the E2E metadata needed before opening (never the wrapped key).
@@ -514,6 +548,7 @@ async fn share_info(
     State(state): State<AppState>,
     client: ClientInfo,
     owner: Option<Owner>,
+    recipient: Recipient,
     Path(slug): Path<String>,
 ) -> AppResult<Json<ShareInfo>> {
     if !state.limits.lookup.check(&client.ip.to_string()) {
@@ -521,7 +556,7 @@ async fn share_info(
     }
     let row = store::by_slug(&state.db, &slug).await?.ok_or(AppError::NotFound)?;
     let rules = store::rules(&state.db, &row.id).await?;
-    let decision = policy::evaluate(&row.state(rules), &access_context(&client, owner.as_ref()));
+    let decision = policy::evaluate(&row.state(rules), &access_context(&client, owner.as_ref(), &recipient));
 
     let (status, auth_methods) = match &decision {
         Decision::Unavailable => return Err(AppError::NotFound),
@@ -530,7 +565,7 @@ async fn share_info(
         Decision::Denied => (AccessStatus::Denied, vec![]),
         Decision::NeedOwnerLogin => (AccessStatus::NeedOwnerLogin, vec![]),
         Decision::NeedOwnerMfa => (AccessStatus::NeedOwnerMfa, vec![]),
-        Decision::NeedRecipientAuth(m) => (AccessStatus::NeedAuth, m.clone()),
+        Decision::NeedRecipientAuth(m) => (AccessStatus::NeedAuth, offered_methods(&state, m)),
     };
     let visible = decision == Decision::Allow;
     Ok(Json(ShareInfo {
@@ -548,7 +583,9 @@ async fn share_info(
 }
 
 /// Records a wrong passphrase; destroys the share after too many.
-async fn wrong_passphrase(state: &AppState, row: &ShareRow, client: &ClientInfo, owner: Option<&Owner>) -> AppError {
+async fn wrong_passphrase(state: &AppState, row: &ShareRow, client: &ClientInfo, owner: Option<&Owner>, recipient: &Recipient) -> AppError {
+    let who = identity_label(owner, recipient);
+    let who = who.as_deref();
     let attempts: Result<(i64,), _> =
         sqlx::query_as("UPDATE shares SET failed_attempts = failed_attempts + 1 WHERE id = ? RETURNING failed_attempts")
             .bind(&row.id)
@@ -563,11 +600,11 @@ async fn wrong_passphrase(state: &AppState, row: &ShareRow, client: &ClientInfo,
         if let Err(e) = store::destroy_files(state, &row.id).await {
             return e.into();
         }
-        store::log_access(&state.db, &row.id, client, identity_label(owner), "destroyed_bad_passphrase").await;
+        store::log_access(&state.db, &row.id, client, who, "destroyed_bad_passphrase").await;
         tracing::warn!(share = %row.id, "share destroyed after too many wrong passphrases");
         return AppError::NotFound;
     }
-    store::log_access(&state.db, &row.id, client, identity_label(owner), "wrong_passphrase").await;
+    store::log_access(&state.db, &row.id, client, who, "wrong_passphrase").await;
     AppError::Access("wrong_passphrase", format!("wrong passphrase ({} attempts left)", limit - attempts))
 }
 
@@ -578,6 +615,7 @@ async fn open_share(
     State(state): State<AppState>,
     client: ClientInfo,
     owner: Option<Owner>,
+    recipient: Recipient,
     Path(slug): Path<String>,
     body: Option<Json<OpenRequest>>,
 ) -> AppResult<Json<OpenResponse>> {
@@ -587,8 +625,9 @@ async fn open_share(
     let req = body.map(|b| b.0).unwrap_or_default();
     let row = store::by_slug(&state.db, &slug).await?.ok_or(AppError::NotFound)?;
     let rules = store::rules(&state.db, &row.id).await?;
-    let decision = policy::evaluate(&row.state(rules), &access_context(&client, owner.as_ref()));
-    let who = identity_label(owner.as_ref());
+    let decision = policy::evaluate(&row.state(rules), &access_context(&client, owner.as_ref(), &recipient));
+    let who = identity_label(owner.as_ref(), &recipient);
+    let who = who.as_deref();
     if decision != Decision::Allow {
         if decision != Decision::Unavailable {
             store::log_access(&state.db, &row.id, &client, who, &format!("blocked:{decision:?}").to_lowercase()).await;
@@ -617,7 +656,7 @@ async fn open_share(
                     Some(dek),
                 ),
                 Err(CryptoError::Decrypt) if row.passphrase_required => {
-                    return Err(wrong_passphrase(&state, &row, &client, owner.as_ref()).await);
+                    return Err(wrong_passphrase(&state, &row, &client, owner.as_ref(), &recipient).await);
                 }
                 Err(e) => return Err(AppError::Internal(e.into())),
             }
@@ -629,7 +668,7 @@ async fn open_share(
                 };
                 let given = sha256(&decode_b64("passphrase_verifier", v)?);
                 if !bool::from(given.ct_eq(stored)) {
-                    return Err(wrong_passphrase(&state, &row, &client, owner.as_ref()).await);
+                    return Err(wrong_passphrase(&state, &row, &client, owner.as_ref(), &recipient).await);
                 }
             }
             (None, None)

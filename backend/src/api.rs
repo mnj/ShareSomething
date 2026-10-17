@@ -22,6 +22,8 @@ pub fn api_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi()).nest(
         "/api",
         auth::owner::router()
+            .merge(auth::recipient::router())
+            .merge(auth::oidc::router())
             .merge(shares::handlers::router())
             .merge(shares::files::router()),
     )
