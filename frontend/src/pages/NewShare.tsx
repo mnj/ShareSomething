@@ -6,16 +6,14 @@ import { CopyButton } from '../components/CopyButton'
 import { CredentialEditor } from '../components/CredentialEditor'
 import { ErrorNote } from '../components/ErrorNote'
 import { FilePicker } from '../components/FilePicker'
-import { PolicyEditor } from '../components/PolicyEditor'
+import { AccessEditor } from '../components/AccessEditor'
 import { SlugPicker, type SlugChoice } from '../components/SlugPicker'
-import { TemplatePicker } from '../components/TemplatePicker'
 import { encryptShare } from '../crypto/e2e'
+import { accessToPolicy, DEFAULT_ACCESS, type AccessState } from '../lib/access'
 import { useMe } from '../lib/auth'
 import { formatBytes, uploadFiles, type Progress } from '../lib/files'
-import { policyToRows, rowsToPolicy, type RuleRow } from '../lib/policy'
 
 type Kind = Schemas['ShareKind']
-type Access = 'public' | 'owner' | 'custom'
 
 const EXPIRY: { label: string; secs: number | null }[] = [
   { label: 'Never', secs: null },
@@ -56,9 +54,7 @@ export function NewShare() {
   const [slug, setSlug] = useState<SlugChoice | null>(null)
   const [expiry, setExpiry] = useState<number | null>(86400)
   const [maxViews, setMaxViews] = useState<number | null>(1)
-  const [access, setAccess] = useState<Access>('public')
-  const [rules, setRules] = useState<RuleRow[]>([{ group: 'include', type: 'everyone', values: '' }])
-  const [requireMfa, setRequireMfa] = useState(false)
+  const [access, setAccess] = useState<AccessState>(DEFAULT_ACCESS)
   const [files, setFiles] = useState<File[]>([])
   const [progress, setProgress] = useState<Progress | null>(null)
   const [created, setCreated] = useState<Created | null>(null)
@@ -67,9 +63,8 @@ export function NewShare() {
   const pickKind = (k: Kind) => {
     setKind(k)
     // Credentials default to the locked-down "only me" setup for moving secrets between machines.
-    if (k === 'credential' && access === 'public') {
-      setAccess('owner')
-      if (me.data?.totp_enabled || me.data?.passkeys) setRequireMfa(true)
+    if (k === 'credential' && access.preset === 'public') {
+      setAccess({ ...access, preset: 'owner', requireMfa: !!(me.data?.totp_enabled || me.data?.passkeys) })
     }
   }
 
@@ -87,11 +82,6 @@ export function NewShare() {
     }
   }
 
-  const policy = () => {
-    if (access === 'public') return [{ group: 'include' as const, type: 'everyone' as const }]
-    if (access === 'owner') return [{ group: 'include' as const, type: 'owner' as const }]
-    return rowsToPolicy(rules)
-  }
 
   const create = useMutation({
     mutationFn: async (): Promise<Created> => {
@@ -102,8 +92,8 @@ export function NewShare() {
         slug: slug ?? {},
         max_views: maxViews,
         expires_in_secs: expiry,
-        require_owner_mfa: requireMfa,
-        policy: policy(),
+        require_owner_mfa: access.requireMfa,
+        policy: accessToPolicy(access),
         files: kind === 'files' ? files.map((f) => ({ size: f.size })) : null,
       }
       if (kind === 'files' && files.length === 0) throw new Error('Choose at least one file.')
@@ -134,7 +124,6 @@ export function NewShare() {
 
   if (created) return <CreatedView created={created} onAnother={() => location.reload()} />
 
-  const hasMfa = !!(me.data?.totp_enabled || me.data?.passkeys)
   const e2eFragment = encMode === 'e2e' && !passphrase
 
   return (
@@ -213,31 +202,7 @@ export function NewShare() {
 
       <section className="card stack">
         <h2>Who can open it</h2>
-        <div className="segmented" role="radiogroup" aria-label="Access">
-          {(
-            [
-              ['public', 'Anyone with the link'],
-              ['owner', 'Only me'],
-              ['custom', 'Custom rules'],
-            ] as const
-          ).map(([a, label]) => (
-            <button key={a} type="button" role="radio" aria-checked={access === a} className={access === a ? 'active' : ''} onClick={() => setAccess(a)}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <TemplatePicker
-          onApply={(p) => {
-            setAccess('custom')
-            setRules(policyToRows(p))
-          }}
-          current={access === 'custom' ? () => rowsToPolicy(rules) : null}
-        />
-        {access === 'custom' && <PolicyEditor rows={rules} onChange={setRules} />}
-        <label className="check">
-          <input type="checkbox" checked={requireMfa} disabled={!hasMfa} onChange={(e) => setRequireMfa(e.target.checked)} />
-          Also require my authenticator code or passkey (owner sign-in + fresh MFA){!hasMfa && ' (set up TOTP or a passkey first)'}
-        </label>
+        <AccessEditor value={access} onChange={setAccess} />
       </section>
 
       <section className="card stack">

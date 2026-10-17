@@ -494,3 +494,14 @@ span.note-error {
 .recipient-bar {
   justify-content: center;
 }
+.edit-share {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 4px;
+}
+.qr {
+  background: #fff;
+  padding: 8px;
+  border-radius: 8px;
+  align-self: flex-start;
+}

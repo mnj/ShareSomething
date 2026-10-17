@@ -1430,3 +1430,113 @@ async fn api_requests_are_rate_limited_per_ip() {
     let r = t.req("GET", "/api/auth/me", None, None, "198.51.100.2", &[]).await;
     assert_eq!(r.status, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn edit_share_settings() {
+    let t = TestApp::new().await;
+    let c = t.login().await;
+    let mut body = public_text("editable");
+    body["max_views"] = json!(3);
+    let share = t.create(&c, body).await;
+    let (id, slug) = (share["id"].as_str().unwrap(), share["slug"].as_str().unwrap());
+    t.post(&format!("/api/s/{slug}/open"), json!({}), None).await;
+    let uri = format!("/api/shares/{id}");
+    let patch = |b: Value| t.req("PATCH", &uri, Some(b), Some(&c), "198.51.100.1", &[]);
+
+    let r = patch(json!({"max_views": 1})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "limit at or below views used");
+    let in_a_day = now() + 86_400;
+    let r = patch(json!({
+        "title": "Renamed", "max_views": 5, "expires_at": in_a_day,
+        "policy": [{"group": "include", "type": "ip", "cidrs": ["10.0.0.0/8"]}],
+    }))
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(
+        (
+            r.body["title"].as_str(),
+            r.body["max_views"].as_i64(),
+            r.body["expires_at"].as_i64()
+        ),
+        (Some("Renamed"), Some(5), Some(in_a_day))
+    );
+    assert_eq!(
+        t.get(&format!("/api/s/{slug}"), None).await.body["status"],
+        "denied",
+        "new policy applies"
+    );
+    let r = patch(json!({"max_views": 0, "expires_at": 0, "title": ""})).await;
+    assert!(r.body["max_views"].is_null() && r.body["expires_at"].is_null() && r.body["title"].is_null());
+
+    patch(json!({"revoke": true})).await;
+    assert_eq!(
+        patch(json!({"title": "x"})).await.status,
+        StatusCode::CONFLICT,
+        "revoked shares can't be edited"
+    );
+}
+
+#[tokio::test]
+async fn totp_setup_confirm_and_disable_from_ui() {
+    let t = TestApp::new().await;
+    let c = t.login().await;
+    let setup = t.post("/api/auth/totp/setup", json!({}), Some(&c)).await;
+    assert_eq!(setup.status, StatusCode::OK, "{}", setup.body);
+    assert!(setup.body["qr_svg"].as_str().unwrap().starts_with("data:image/svg+xml;base64,"));
+    let secret = setup.body["secret"].as_str().unwrap().to_string();
+    assert_ne!(secret, t.totp_secret);
+
+    // The old secret stays active until the new one is confirmed.
+    let wrong = t.post("/api/auth/totp/confirm", json!({"code": "000000"}), Some(&c)).await;
+    assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+    let ok = t
+        .post("/api/auth/totp/confirm", json!({"code": totp::code_at(&secret, now())}), Some(&c))
+        .await;
+    assert_eq!(ok.status, StatusCode::OK, "{}", ok.body);
+    let (stored,): (Option<String>,) = sqlx::query_as("SELECT totp_secret FROM owner")
+        .fetch_one(&t.state.db)
+        .await
+        .unwrap();
+    assert_eq!(stored.as_deref(), Some(secret.as_str()));
+    let old = t
+        .post(
+            "/api/auth/login",
+            json!({"password": PASSWORD, "totp": totp::code_at(&t.totp_secret, now() + 30)}),
+            None,
+        )
+        .await;
+    assert_eq!(old.status, StatusCode::UNAUTHORIZED, "old authenticator no longer works");
+
+    // Disabling is refused while an owner-MFA share depends on it and no passkey exists.
+    let mut body = public_text("needs mfa");
+    body["require_owner_mfa"] = json!(true);
+    let share = t.create(&c, body).await;
+    let del = t.req("DELETE", "/api/auth/totp", None, Some(&c), "198.51.100.1", &[]).await;
+    assert_eq!(del.status, StatusCode::CONFLICT, "{}", del.body);
+    t.req(
+        "PATCH",
+        &format!("/api/shares/{}", share["id"].as_str().unwrap()),
+        Some(json!({"revoke": true})),
+        Some(&c),
+        "198.51.100.1",
+        &[],
+    )
+    .await;
+    let del = t.req("DELETE", "/api/auth/totp", None, Some(&c), "198.51.100.1", &[]).await;
+    assert_eq!(del.status, StatusCode::OK, "{}", del.body);
+    assert_eq!(del.body["totp_enabled"], false);
+
+    // Stale MFA blocks setup while a factor exists.
+    let setup = t.post("/api/auth/totp/setup", json!({}), Some(&c)).await;
+    assert_eq!(setup.status, StatusCode::OK, "no factor left, so no step-up needed");
+    let code = totp::code_at(setup.body["secret"].as_str().unwrap(), now());
+    t.post("/api/auth/totp/confirm", json!({"code": code}), Some(&c)).await;
+    sqlx::query("UPDATE owner_sessions SET mfa_at = 0")
+        .execute(&t.state.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        t.post("/api/auth/totp/setup", json!({}), Some(&c)).await.body["error"],
+        "need_owner_mfa"
+    );
+}

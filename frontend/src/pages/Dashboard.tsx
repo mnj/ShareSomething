@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, unwrap, type ShareSummary } from '../api/client'
 import { CopyButton } from '../components/CopyButton'
+import { EditShare } from '../components/EditShare'
 import { ErrorNote } from '../components/ErrorNote'
 import { describePolicy, formatRelative, formatTime, viewsLabel } from '../lib/format'
 
@@ -41,6 +42,7 @@ export function Dashboard() {
 function ShareItem({ s }: { s: ShareSummary }) {
   const qc = useQueryClient()
   const [showLog, setShowLog] = useState(false)
+  const [editing, setEditing] = useState(false)
   const invalidate = () => qc.invalidateQueries({ queryKey: ['shares'] })
   const revoke = useMutation({
     mutationFn: () => unwrap(api.PATCH('/api/shares/{id}', { params: { path: { id: s.id } }, body: { revoke: true } })),
@@ -71,6 +73,11 @@ function ShareItem({ s }: { s: ShareSummary }) {
               label={fragmentKey ? 'Copy link (no key)' : 'Copy link'}
             />
           )}
+          {active && (
+            <button type="button" className="btn btn-small btn-ghost" onClick={() => setEditing(!editing)}>
+              Edit
+            </button>
+          )}
           <button type="button" className="btn btn-small btn-ghost" onClick={() => setShowLog(!showLog)}>
             Log
           </button>
@@ -91,6 +98,7 @@ function ShareItem({ s }: { s: ShareSummary }) {
       </p>
       <p className="hint">Access: {describePolicy(s.policy)}</p>
       <ErrorNote error={revoke.error ?? remove.error} />
+      {editing && active && <EditShare share={s} onDone={() => setEditing(false)} />}
       {showLog && <AccessLog id={s.id} />}
     </li>
   )

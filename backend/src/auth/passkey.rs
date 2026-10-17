@@ -24,7 +24,7 @@ use webauthn_rs::prelude::{
     Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, Uuid, Webauthn, WebauthnBuilder,
 };
 
-use super::owner::{MeResponse, Owner, mark_mfa, me_response, owner_has_mfa, start_session};
+use super::owner::{MeResponse, Owner, mark_mfa, me_response, require_fresh_mfa, start_session};
 use crate::{
     app::AppState,
     config::Config,
@@ -216,17 +216,6 @@ async fn delete(State(state): State<AppState>, owner: Owner, Path(id): Path<Stri
     }
     tracing::info!("owner passkey removed");
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// Changing credentials requires a recent second factor, if one exists.
-async fn require_fresh_mfa(state: &AppState, owner: &Owner) -> AppResult<()> {
-    if owner_has_mfa(state).await? && !owner.mfa_fresh() {
-        return Err(AppError::Access(
-            "need_owner_mfa",
-            "confirm with your authenticator or a passkey first".into(),
-        ));
-    }
-    Ok(())
 }
 
 /// Begin registering a new passkey. Needs a fresh MFA when TOTP or another passkey exists.

@@ -12,6 +12,7 @@ export function Settings() {
     <div className="stack">
       <h1>Settings</h1>
       <Passkeys />
+      <AuthenticatorApp />
       <Templates />
     </div>
   )
@@ -101,6 +102,91 @@ function Passkeys() {
         <p className="note note-warn">This browser doesn't support passkeys (they also need https or localhost).</p>
       )}
       <ErrorNote error={error ?? list.error} />
+    </section>
+  )
+}
+
+function AuthenticatorApp() {
+  const me = useMe()
+  const qc = useQueryClient()
+  const [setup, setSetup] = useState<{ secret: string; qr_svg: string } | null>(null)
+  const [code, setCode] = useState('')
+  const [needMfa, setNeedMfa] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+  const enabled = !!me.data?.totp_enabled
+  const run = async (fn: () => Promise<void>) => {
+    setError(null)
+    try {
+      await fn()
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'need_owner_mfa') setNeedMfa(true)
+      else setError(e)
+    }
+  }
+
+  return (
+    <section className="card stack">
+      <h2>Authenticator app</h2>
+      <p className="hint">
+        {enabled
+          ? 'A 6-digit code from your authenticator app is required at sign-in (unless you use a passkey).'
+          : 'Not set up. Add one so a stolen password alone is not enough to sign in.'}
+      </p>
+      {needMfa && (
+        <div className="note">
+          <MfaPrompt onDone={() => setNeedMfa(false)}>
+            <p>Confirm it's you first, then try again.</p>
+          </MfaPrompt>
+        </div>
+      )}
+      {setup ? (
+        <form
+          className="stack"
+          onSubmit={(e) => {
+            e.preventDefault()
+            run(async () => {
+              qc.setQueryData(['me'], await unwrap(api.POST('/api/auth/totp/confirm', { body: { code } })))
+              setSetup(null)
+              setCode('')
+            })
+          }}
+        >
+          <p>Scan this with your authenticator app, then enter the code it shows.</p>
+          <img className="qr" src={setup.qr_svg} alt="QR code for your authenticator app" width={200} height={200} />
+          <p className="hint">
+            Can't scan? Enter this key manually: <code>{setup.secret}</code>
+          </p>
+          <div className="row">
+            <input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" aria-label="Code from the app" required />
+            <button className="btn btn-primary">Confirm</button>
+            <button type="button" className="btn btn-ghost" onClick={() => setSetup(null)}>
+              Cancel
+            </button>
+          </div>
+          {enabled && <p className="hint">Your current authenticator keeps working until you confirm the new one.</p>}
+        </form>
+      ) : (
+        <div className="row wrap">
+          <button type="button" className="btn" onClick={() => run(async () => setSetup(await unwrap(api.POST('/api/auth/totp/setup'))))}>
+            {enabled ? 'Replace authenticator' : 'Set up authenticator app'}
+          </button>
+          {enabled && (
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={() =>
+                confirm('Turn off the authenticator app?') &&
+                run(async () => {
+                  qc.setQueryData(['me'], await unwrap(api.DELETE('/api/auth/totp')))
+                })
+              }
+            >
+              Turn off
+            </button>
+          )}
+        </div>
+      )}
+      <ErrorNote error={error} />
     </section>
   )
 }

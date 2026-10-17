@@ -295,6 +295,120 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(logout))
         .routes(routes!(me))
         .routes(routes!(step_up))
+        .routes(routes!(totp_setup))
+        .routes(routes!(totp_confirm))
+        .routes(routes!(totp_disable))
+}
+
+/// Changing credentials requires a recent second factor, if one exists.
+pub(super) async fn require_fresh_mfa(state: &AppState, owner: &Owner) -> AppResult<()> {
+    if owner_has_mfa(state).await? && !owner.mfa_fresh() {
+        return Err(AppError::Access(
+            "need_owner_mfa",
+            "confirm with your authenticator or a passkey first".into(),
+        ));
+    }
+    Ok(())
+}
+
+const TOTP_SETUP_TTL_SECS: i64 = 10 * 60;
+
+#[derive(Serialize, ToSchema)]
+pub struct TotpSetup {
+    /// Base32 secret for manual entry.
+    pub secret: String,
+    pub otpauth_url: String,
+    /// QR code as an SVG data URL.
+    pub qr_svg: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct TotpConfirm {
+    pub code: String,
+}
+
+/// Start (re)configuring the authenticator app. Needs a fresh MFA if a second factor exists.
+#[utoipa::path(post, path = "/auth/totp/setup", tag = "auth", operation_id = "totp_setup",
+    responses((status = 200, body = TotpSetup), (status = 403, body = crate::error::ErrorBody)))]
+async fn totp_setup(State(state): State<AppState>, owner: Owner) -> AppResult<Json<TotpSetup>> {
+    use base64::Engine;
+    require_fresh_mfa(&state, &owner).await?;
+    let secret = totp::new_secret();
+    let otpauth_url = totp::otpauth_url(&secret)?;
+    let svg = qrcode::QrCode::new(otpauth_url.as_bytes())
+        .map_err(anyhow::Error::from)?
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(200, 200)
+        .build();
+    sqlx::query("UPDATE owner SET totp_pending = ?, totp_pending_at = ? WHERE id = 1")
+        .bind(&secret)
+        .bind(now())
+        .execute(&state.db)
+        .await?;
+    let qr_svg = format!(
+        "data:image/svg+xml;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(svg)
+    );
+    Ok(Json(TotpSetup {
+        secret,
+        otpauth_url,
+        qr_svg,
+    }))
+}
+
+/// Confirm the new authenticator with a code from it; replaces any previous TOTP secret.
+#[utoipa::path(post, path = "/auth/totp/confirm", tag = "auth", operation_id = "totp_confirm", request_body = TotpConfirm,
+    responses((status = 200, body = MeResponse), (status = 401, body = crate::error::ErrorBody)))]
+async fn totp_confirm(
+    State(state): State<AppState>,
+    client: ClientInfo,
+    owner: Owner,
+    Json(req): Json<TotpConfirm>,
+) -> AppResult<Json<MeResponse>> {
+    if !state.limits.login.check(&client.ip.to_string()) {
+        return Err(AppError::TooManyRequests);
+    }
+    let (pending, at): (Option<String>, Option<i64>) = sqlx::query_as("SELECT totp_pending, totp_pending_at FROM owner WHERE id = 1")
+        .fetch_one(&state.db)
+        .await?;
+    let Some(secret) = pending.filter(|_| at.is_some_and(|t| now() - t <= TOTP_SETUP_TTL_SECS)) else {
+        return Err(AppError::BadRequest("start the setup again; it expired".into()));
+    };
+    let Some(step) = totp::verify(&secret, &req.code, now())? else {
+        return Err(AppError::AuthFailed(
+            "invalid_code",
+            "that code doesn't match; check the time on your device",
+        ));
+    };
+    sqlx::query("UPDATE owner SET totp_secret = ?, totp_last_step = ?, totp_pending = NULL, totp_pending_at = NULL WHERE id = 1")
+        .bind(&secret)
+        .bind(step)
+        .execute(&state.db)
+        .await?;
+    tracing::info!("owner TOTP configured from the web UI");
+    let fresh = mark_mfa(&state, owner).await?;
+    Ok(Json(me_response(&state, Some(&fresh)).await?))
+}
+
+/// Turn off the authenticator app. Refused if it would leave "require owner MFA" shares unopenable.
+#[utoipa::path(delete, path = "/auth/totp", tag = "auth", operation_id = "totp_disable",
+    responses((status = 200, body = MeResponse), (status = 409, body = crate::error::ErrorBody)))]
+async fn totp_disable(State(state): State<AppState>, owner: Owner) -> AppResult<Json<MeResponse>> {
+    require_fresh_mfa(&state, &owner).await?;
+    let mfa_shares: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM shares WHERE require_owner_mfa = 1 AND ciphertext IS NOT NULL")
+        .fetch_one(&state.db)
+        .await?;
+    if passkey_count(&state).await? == 0 && mfa_shares.0 > 0 {
+        return Err(AppError::Conflict(format!(
+            "{} active share(s) require owner MFA; add a passkey first or change those shares",
+            mfa_shares.0
+        )));
+    }
+    sqlx::query("UPDATE owner SET totp_secret = NULL, totp_last_step = NULL WHERE id = 1")
+        .execute(&state.db)
+        .await?;
+    tracing::info!("owner TOTP disabled from the web UI");
+    Ok(Json(me_response(&state, Some(&owner)).await?))
 }
 
 /// Whether the owner has a second factor (TOTP or a passkey) for MFA step-ups.

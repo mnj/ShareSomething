@@ -390,8 +390,19 @@ async fn update_share(
     if let Some(m) = req.require_owner_mfa {
         validate_mfa_toggle(&state, m).await?;
     }
+    let edits =
+        req.title.is_some() || req.expires_at.is_some() || req.max_views.is_some() || req.require_owner_mfa.is_some() || policy.is_some();
+    if edits && (row.ciphertext.is_none() || row.revoked_at.is_some() || row.burned_at.is_some()) {
+        return Err(AppError::Conflict("this share's content is gone; it can't be changed".into()));
+    }
     if req.max_views.is_some_and(|m| !(0..=MAX_VIEWS).contains(&m)) {
         return Err(AppError::BadRequest(format!("max_views must be 0..{MAX_VIEWS}")));
+    }
+    if req.max_views.is_some_and(|m| m != 0 && m <= row.views) {
+        return Err(AppError::BadRequest(format!(
+            "the view limit must be more than the {} views already used",
+            row.views
+        )));
     }
     if req
         .expires_at

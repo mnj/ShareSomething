@@ -408,6 +408,109 @@
         }
       }
     },
+    "/api/auth/totp": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Turn off the authenticator app. Refused if it would leave \"require owner MFA\" shares unopenable.",
+        "operationId": "totp_disable",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/totp/confirm": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Confirm the new authenticator with a code from it; replaces any previous TOTP secret.",
+        "operationId": "totp_confirm",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/totp/setup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start (re)configuring the authenticator app. Needs a fresh MFA if a second factor exists.",
+        "operationId": "totp_setup",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotpSetup"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/policy-templates": {
       "get": {
         "tags": [
@@ -2755,6 +2858,38 @@
           "token": {
             "type": "string",
             "description": "Download token from the open response."
+          }
+        }
+      },
+      "TotpConfirm": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "TotpSetup": {
+        "type": "object",
+        "required": [
+          "secret",
+          "otpauth_url",
+          "qr_svg"
+        ],
+        "properties": {
+          "otpauth_url": {
+            "type": "string"
+          },
+          "qr_svg": {
+            "type": "string",
+            "description": "QR code as an SVG data URL."
+          },
+          "secret": {
+            "type": "string",
+            "description": "Base32 secret for manual entry."
           }
         }
       },
