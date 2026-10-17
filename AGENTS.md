@@ -103,8 +103,9 @@ Migrations live in `backend/migrations/`. Add a new numbered file; never edit an
     together with `Sec-Fetch-Site: same-origin`, which is what browsers send for our own form posts
     under `Referrer-Policy: no-referrer` (streamed file downloads). Don't loosen it further.
 16. Large downloads must not be buffered in memory. Server-mode files stream through a form POST
-    (`/files/{idx}/download`). E2E files stream through the File System Access API when the browser
-    has it, and only fall back to a Blob otherwise.
+    (`/files/{idx}/download`). E2E files are tried in this order: the File System Access API, then
+    the service worker (`frontend/public/sw.js`, `/__download/<id>`, one chunk in flight), then a
+    Blob. The service worker must only ever handle `/__download/` and cache nothing.
 
 ## Common tasks
 
@@ -153,6 +154,6 @@ by older clients must still open.
 
 ## Roadmap
 
-All five planned phases are done. Ideas for later: a service-worker streaming path for E2E
-downloads in browsers without the File System Access API, TOTP enrollment from the UI, and share
-editing (title/expiry/policy) from the dashboard.
+All five planned phases are done, plus service-worker streaming, TOTP setup in the UI and
+dashboard editing. Possible next steps: email notifications when a share is opened, multiple
+owner accounts, and S3-compatible blob storage.

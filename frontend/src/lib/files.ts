@@ -1,5 +1,6 @@
 import { ApiError, type Schemas } from '../api/client'
 import { CHUNK_SIZE, decryptChunk, encryptChunk } from '../crypto/e2e'
+import { streamViaWorker } from './swDownload'
 
 export interface Progress {
   done: number
@@ -64,7 +65,28 @@ declare global {
   }
 }
 
-/** Fetches (and for E2E decrypts) a file chunk by chunk, handing each plaintext chunk to `sink`. */
+/** Fetches (and for E2E decrypts) a file chunk by chunk, yielding plaintext chunks. */
+async function* fileChunks(
+  slug: string,
+  token: string,
+  idx: number,
+  file: Schemas['FileEntry'],
+  dek: Uint8Array<ArrayBuffer> | undefined,
+  onProgress: (p: Progress) => void,
+): AsyncGenerator<Uint8Array<ArrayBuffer>> {
+  const chunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE))
+  let done = 0
+  for (let n = 0; n < chunks; n++) {
+    const res = await check(await fetch(`/api/s/${encodeURIComponent(slug)}/files/${idx}/chunks/${n}`, { headers: { 'x-download-token': token } }))
+    const data = new Uint8Array(await res.arrayBuffer())
+    const plain = dek ? await decryptChunk(dek, idx, n, n === chunks - 1, data) : data
+    done += plain.length
+    yield plain
+    onProgress({ done, total: file.size })
+  }
+  if (done !== file.size) throw new Error(`${file.name}: size mismatch, the download is incomplete`)
+}
+
 async function pipeFile(
   slug: string,
   token: string,
@@ -74,17 +96,27 @@ async function pipeFile(
   sink: (chunk: Uint8Array<ArrayBuffer>) => Promise<void> | void,
   onProgress: (p: Progress) => void,
 ): Promise<void> {
-  const chunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE))
-  let done = 0
-  for (let n = 0; n < chunks; n++) {
-    const res = await check(await fetch(`/api/s/${encodeURIComponent(slug)}/files/${idx}/chunks/${n}`, { headers: { 'x-download-token': token } }))
-    const data = new Uint8Array(await res.arrayBuffer())
-    const plain = dek ? await decryptChunk(dek, idx, n, n === chunks - 1, data) : data
-    await sink(plain)
-    done += plain.length
-    onProgress({ done, total: file.size })
-  }
-  if (done !== file.size) throw new Error(`${file.name}: size mismatch, the download is incomplete`)
+  for await (const chunk of fileChunks(slug, token, idx, file, dek, onProgress)) await sink(chunk)
+}
+
+/**
+ * Streams one file to disk through the service worker (constant memory, any modern browser).
+ * Throws StreamUnavailable if the worker can't be used; callers fall back to a Blob.
+ */
+export async function downloadViaWorker(
+  sw: ServiceWorker,
+  slug: string,
+  token: string,
+  idx: number,
+  file: Schemas['FileEntry'],
+  dek: Uint8Array<ArrayBuffer> | undefined,
+  onProgress: (p: Progress) => void,
+): Promise<void> {
+  const it = fileChunks(slug, token, idx, file, dek, onProgress)
+  await streamViaWorker(sw, file.name, file.size, async () => {
+    const r = await it.next()
+    return r.done ? null : r.value
+  })
 }
 
 /** Downloads one file into a Blob. Holds the whole file in memory (fallback path). */

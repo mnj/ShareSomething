@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { activeWorker, StreamUnavailable } from '../lib/swDownload'
 import { api, ApiError, unwrap, type Schemas, type ShareInfo, type SharePayload } from '../api/client'
 import { CopyButton } from '../components/CopyButton'
 import { ErrorNote } from '../components/ErrorNote'
@@ -12,6 +13,7 @@ import {
   canSaveToFolder,
   downloadFile,
   downloadToHandle,
+  downloadViaWorker,
   formatBytes,
   isAbort,
   MEMORY_WARN_BYTES,
@@ -292,7 +294,17 @@ function FileList({ r, files, note }: { r: Revealed; files: Schemas['FileEntry']
         const handle = dir ? await dir.getFileHandle(safeFileName(f.name), { create: true }) : await window.showSaveFilePicker!({ suggestedName: f.name })
         await downloadToHandle(handle, r.slug, token, i, f, dek, onProgress)
       } else {
-        saveBlob(await downloadFile(r.slug, token, i, f, dek, onProgress), f.name)
+        const sw = await activeWorker()
+        let streamed = false
+        if (sw) {
+          try {
+            await downloadViaWorker(sw, r.slug, token, i, f, dek, onProgress)
+            streamed = true
+          } catch (e) {
+            if (!(e instanceof StreamUnavailable)) throw e
+          }
+        }
+        if (!streamed) saveBlob(await downloadFile(r.slug, token, i, f, dek, onProgress), f.name)
       }
       set(i, 'done')
     } catch (e) {
@@ -324,7 +336,11 @@ function FileList({ r, files, note }: { r: Revealed; files: Schemas['FileEntry']
   }
 
   const busy = Object.values(progress).some((p) => typeof p === 'object')
-  const big = !serverMode && !canSaveToDisk() && files.some((f) => f.size > MEMORY_WARN_BYTES)
+  const [workerReady, setWorkerReady] = useState(false)
+  useEffect(() => {
+    activeWorker().then((w) => setWorkerReady(!!w))
+  }, [])
+  const big = !serverMode && !canSaveToDisk() && !workerReady && files.some((f) => f.size > MEMORY_WARN_BYTES)
   return (
     <div className="stack">
       <ul className="file-list">
@@ -360,7 +376,7 @@ function FileList({ r, files, note }: { r: Revealed; files: Schemas['FileEntry']
       <p className="hint">
         {serverMode
           ? "Files are decrypted by the server and saved by your browser's download manager."
-          : canSaveToDisk()
+          : canSaveToDisk() || workerReady
             ? 'Files are decrypted in your browser and written straight to disk.'
             : 'Files are decrypted in your browser as they download.'}
       </p>
