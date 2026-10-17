@@ -1540,3 +1540,54 @@ async fn totp_setup_confirm_and_disable_from_ui() {
         "need_owner_mfa"
     );
 }
+
+#[tokio::test]
+async fn redirect_links() {
+    let t = TestApp::new().await;
+    let c = t.login().await;
+    let link = |secs: Value| {
+        json!({
+            "kind": "link", "enc_mode": "server", "slug": {}, "redirect_secs": secs,
+            "policy": [{"group": "include", "type": "everyone"}],
+            "payload": {"kind": "link", "url": "https://example.com/docs"},
+        })
+    };
+    let share = t.create(&c, link(json!(5))).await;
+    assert_eq!(share["redirect_secs"], 5);
+    let slug = share["slug"].as_str().unwrap();
+    assert_eq!(t.get(&format!("/api/s/{slug}"), None).await.body["redirect_secs"], 5);
+
+    assert_eq!(
+        t.post("/api/shares", link(json!(61)), Some(&c)).await.status,
+        StatusCode::BAD_REQUEST
+    );
+    let mut text = public_text("x");
+    text["redirect_secs"] = json!(3);
+    assert_eq!(
+        t.post("/api/shares", text, Some(&c)).await.status,
+        StatusCode::BAD_REQUEST,
+        "links only"
+    );
+
+    // Hidden from visitors who can't open the share.
+    let id = share["id"].as_str().unwrap();
+    let uri = format!("/api/shares/{id}");
+    t.req(
+        "PATCH",
+        &uri,
+        Some(json!({"policy": [{"group": "include", "type": "owner"}]})),
+        Some(&c),
+        "198.51.100.1",
+        &[],
+    )
+    .await;
+    assert!(t.get(&format!("/api/s/{slug}"), None).await.body["redirect_secs"].is_null());
+    let r = t
+        .req("PATCH", &uri, Some(json!({"redirect_secs": -1})), Some(&c), "198.51.100.1", &[])
+        .await;
+    assert!(r.body["redirect_secs"].is_null(), "-1 turns redirect off");
+    let r = t
+        .req("PATCH", &uri, Some(json!({"redirect_secs": 0})), Some(&c), "198.51.100.1", &[])
+        .await;
+    assert_eq!(r.body["redirect_secs"], 0);
+}

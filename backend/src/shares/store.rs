@@ -32,6 +32,7 @@ pub struct ShareRow {
     pub upload_pending: bool,
     pub upload_dek: Option<Vec<u8>>,
     pub upload_token_hash: Option<Vec<u8>>,
+    pub redirect_secs: Option<i64>,
 }
 
 impl ShareRow {

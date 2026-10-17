@@ -1743,6 +1743,14 @@
               "$ref": "#/components/schemas/PolicyRule"
             }
           },
+          "redirect_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Link shares: open the target automatically after showing it for this many seconds (0-60)."
+          },
           "require_owner_mfa": {
             "type": "boolean"
           },
@@ -2575,6 +2583,14 @@
           "passphrase_required": {
             "type": "boolean"
           },
+          "redirect_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Link shares: open the target after this many seconds. The page may also open the share\nwithout a Reveal click, but only when it has no view limit and no passphrase."
+          },
           "slug": {
             "type": "string"
           },
@@ -2782,6 +2798,14 @@
               "$ref": "#/components/schemas/PolicyRule"
             }
           },
+          "redirect_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Link shares: auto-redirect delay in seconds."
+          },
           "require_owner_mfa": {
             "type": "boolean"
           },
@@ -2920,6 +2944,14 @@
             "items": {
               "$ref": "#/components/schemas/PolicyRule"
             }
+          },
+          "redirect_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Link shares: seconds before auto-redirect (0-60); -1 turns redirecting off."
           },
           "require_owner_mfa": {
             "type": [

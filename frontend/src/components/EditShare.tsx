@@ -20,6 +20,8 @@ export function EditShare({ share, onDone }: { share: ShareSummary; onDone: () =
   const [expiry, setExpiry] = useState<string>('keep')
   const [maxViews, setMaxViews] = useState(String(share.max_views ?? 0))
   const [access, setAccess] = useState(() => accessFromPolicy(share.policy, share.require_owner_mfa))
+  const [redirect, setRedirect] = useState(share.redirect_secs != null)
+  const [redirectSecs, setRedirectSecs] = useState(share.redirect_secs ?? 5)
 
   const save = useMutation({
     mutationFn: () => {
@@ -32,6 +34,7 @@ export function EditShare({ share, onDone }: { share: ShareSummary; onDone: () =
             expires_at,
             max_views: Number(maxViews) || 0,
             require_owner_mfa: access.requireMfa,
+            redirect_secs: share.kind === 'link' ? (redirect ? redirectSecs : -1) : undefined,
             policy: accessToPolicy(access),
           },
         }),
@@ -73,6 +76,22 @@ export function EditShare({ share, onDone }: { share: ShareSummary; onDone: () =
           <input type="number" min={0} max={10000} value={maxViews} onChange={(e) => setMaxViews(e.target.value)} />
         </label>
       </div>
+      {share.kind === 'link' && (
+        <label className="check">
+          <input type="checkbox" checked={redirect} onChange={(e) => setRedirect(e.target.checked)} />
+          Redirect automatically after
+          <input
+            type="number"
+            className="inline-number"
+            min={0}
+            max={60}
+            value={redirectSecs}
+            onChange={(e) => setRedirectSecs(Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
+            aria-label="Redirect delay in seconds"
+          />
+          seconds
+        </label>
+      )}
       <AccessEditor value={access} onChange={setAccess} />
       <ErrorNote error={save.error} />
       <div className="row">

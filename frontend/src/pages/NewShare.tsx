@@ -54,6 +54,8 @@ export function NewShare() {
   const [slug, setSlug] = useState<SlugChoice | null>(null)
   const [expiry, setExpiry] = useState<number | null>(86400)
   const [maxViews, setMaxViews] = useState<number | null>(1)
+  const [redirect, setRedirect] = useState(false)
+  const [redirectSecs, setRedirectSecs] = useState(5)
   const [access, setAccess] = useState<AccessState>(DEFAULT_ACCESS)
   const [files, setFiles] = useState<File[]>([])
   const [progress, setProgress] = useState<Progress | null>(null)
@@ -95,6 +97,7 @@ export function NewShare() {
         require_owner_mfa: access.requireMfa,
         policy: accessToPolicy(access),
         files: kind === 'files' ? files.map((f) => ({ size: f.size })) : null,
+        redirect_secs: kind === 'link' && redirect ? redirectSecs : null,
       }
       if (kind === 'files' && files.length === 0) throw new Error('Choose at least one file.')
       const upload = async (res: Schemas['CreateShareResponse'], dek?: Uint8Array<ArrayBuffer>) => {
@@ -146,6 +149,35 @@ export function NewShare() {
         </div>
         {kind === 'text' && <textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} placeholder="Text, notes, a code snippet…" required />}
         {kind === 'link' && <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" required />}
+        {kind === 'link' && (
+          <div className="stack">
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={redirect}
+                onChange={(e) => {
+                  setRedirect(e.target.checked)
+                  // A short link is usually meant to be reused; read-once would also block auto-open.
+                  if (e.target.checked) setMaxViews(null)
+                }}
+              />
+              Redirect automatically, like a URL shortener, after
+              <input
+                type="number"
+                className="inline-number"
+                min={0}
+                max={60}
+                value={redirectSecs}
+                onChange={(e) => setRedirectSecs(Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
+                aria-label="Redirect delay in seconds"
+              />
+              seconds
+            </label>
+            {redirect && (maxViews != null || passphrase) && (
+              <p className="hint">With a view limit or passphrase, visitors click Reveal first; the countdown starts after that.</p>
+            )}
+          </div>
+        )}
         {kind === 'credential' && <CredentialEditor fields={fields} onChange={setFields} />}
         {kind === 'files' && <FilePicker files={files} onChange={setFiles} />}
         {kind !== 'text' && <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" />}

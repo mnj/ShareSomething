@@ -65,6 +65,7 @@ function ShareItem({ s }: { s: ShareSummary }) {
           <span className="badge">{s.enc_mode === 'e2e' ? 'E2E' : 'server'}</span>
           {s.passphrase_required && <span className="badge">passphrase</span>}
           {s.require_owner_mfa && <span className="badge">MFA</span>}
+          {s.redirect_secs != null && <span className="badge">redirect {s.redirect_secs}s</span>}
         </div>
         <div className="row">
           {active && (

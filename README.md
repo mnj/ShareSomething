@@ -31,6 +31,9 @@ security settings** instead of one global setting.
 - **Authenticator app (TOTP)**: set up or replace it from Settings with a QR code (or with `admin init`).
 - **Edit shares later** from the dashboard: title, expiry, view limit, access rules, owner MFA.
 - **Saved access policies**: store a rule set as "Office network" or "Clients via Google" and reuse it.
+- **Short links that redirect**: a link share can open its target after showing it for a few
+  seconds (with "Go now" / "Stay here"), like a URL shortener, but with the same expiry,
+  access rules and access log as everything else.
 - **Pluggable link styles**: `k7m2qx9d`, `monkey-space-sun-earth`, `bafoki-turesa`, or your own
   `wifi-guest`, with an entropy hint for each.
 - **Access log** per share (time, IP, country, outcome).

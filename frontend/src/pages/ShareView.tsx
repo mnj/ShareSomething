@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { activeWorker, StreamUnavailable } from '../lib/swDownload'
 import { api, ApiError, unwrap, type Schemas, type ShareInfo, type SharePayload } from '../api/client'
@@ -31,6 +31,8 @@ interface Revealed {
   title?: string | null
   burned: boolean
   viewsLeft?: number | null
+  /** Link shares: seconds before opening the target automatically. */
+  redirectSecs?: number | null
   /** File shares: token for fetching chunks, and the content key for E2E. */
   download?: { token: string; expiresAt: number; dek?: Uint8Array<ArrayBuffer> }
 }
@@ -99,6 +101,31 @@ function Gate({ info, fragmentKey, onRevealed }: { info: ShareInfo; fragmentKey?
   const [error, setError] = useState<unknown>(null)
   const refresh = () => qc.invalidateQueries({ queryKey: ['share-info', info.slug] })
   const next = encodeURIComponent(location.pathname)
+  const e2eFragmentMissing = info.enc_mode === 'e2e' && !info.passphrase_required && !fragmentKey
+  const reveal = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      onRevealed(await openShare(info, passphrase, fragmentKey))
+    } catch (err) {
+      setError(err)
+      if (err instanceof ApiError && err.status === 404) refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Redirect links open without a click, but only when that can't burn anything: no view limit
+  // (mail scanners run JavaScript too) and nothing to type in.
+  const autoOpen =
+    info.status === 'ready' && info.kind === 'link' && info.redirect_secs != null && info.views_left == null && !info.passphrase_required && !e2eFragmentMissing
+  const autoStarted = useRef(false)
+  useEffect(() => {
+    if (autoOpen && !autoStarted.current) {
+      autoStarted.current = true
+      void reveal()
+    }
+  })
 
   switch (info.status) {
     case 'denied':
@@ -122,19 +149,6 @@ function Gate({ info, fragmentKey, onRevealed }: { info: ShareInfo; fragmentKey?
       )
   }
 
-  const e2eFragmentMissing = info.enc_mode === 'e2e' && !info.passphrase_required && !fragmentKey
-  const reveal = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      onRevealed(await openShare(info, passphrase, fragmentKey))
-    } catch (err) {
-      setError(err)
-      if (err instanceof ApiError && err.status === 404) refresh()
-    } finally {
-      setBusy(false)
-    }
-  }
 
   return (
     <form
@@ -194,7 +208,7 @@ async function openShare(info: ShareInfo, passphrase: string, fragmentKey?: stri
     payload = await decryptPayload<SharePayload>(res.ciphertext!, dek)
   }
   const download = res.download_token ? { token: res.download_token, expiresAt: res.download_expires_at ?? 0, dek } : undefined
-  return { slug: info.slug, payload, title: res.title, burned: res.burned, viewsLeft: res.views_left, download }
+  return { slug: info.slug, payload, title: res.title, burned: res.burned, viewsLeft: res.views_left, download, redirectSecs: info.redirect_secs }
 }
 
 function RevealedView({ r }: { r: Revealed }) {
@@ -208,8 +222,58 @@ function RevealedView({ r }: { r: Revealed }) {
             : 'This share has now been destroyed. Copy what you need before you leave this page.'}
         </p>
       )}
-      {r.payload.kind === 'files' && r.download ? <FileList r={r} files={r.payload.files} note={r.payload.note} /> : <Payload p={r.payload} />}
+      {r.payload.kind === 'files' && r.download ? (
+        <FileList r={r} files={r.payload.files} note={r.payload.note} />
+      ) : r.payload.kind === 'link' && r.redirectSecs != null && safeHttpUrl(r.payload.url) ? (
+        <RedirectCountdown url={safeHttpUrl(r.payload.url)!} secs={r.redirectSecs} note={r.payload.note} />
+      ) : (
+        <Payload p={r.payload} />
+      )}
     </section>
+  )
+}
+
+/** Shows where a short link goes, then navigates there unless the visitor stops it. */
+function RedirectCountdown({ url, secs, note }: { url: string; secs: number; note?: string | null }) {
+  const [left, setLeft] = useState(secs)
+  const [stopped, setStopped] = useState(false)
+  const target = new URL(url)
+  useEffect(() => {
+    if (stopped) return
+    if (left <= 0) {
+      window.location.assign(url)
+      return
+    }
+    const t = setTimeout(() => setLeft((n) => n - 1), 1000)
+    return () => clearTimeout(t)
+  }, [left, stopped, url])
+
+  return (
+    <div className="stack redirect">
+      <p className="hint">This link goes to</p>
+      <p className="redirect-host">{target.host}</p>
+      <code className="redirect-url">{url}</code>
+      {note && <p className="pre-wrap">{note}</p>}
+      {stopped ? (
+        <p className="hint">Redirect stopped.</p>
+      ) : (
+        <>
+          <p aria-live="polite">{left > 0 ? `Opening in ${left} second${left === 1 ? '' : 's'}…` : 'Opening…'}</p>
+          <progress className="progress" value={secs - left} max={secs || 1} aria-label="Time until redirect" />
+        </>
+      )}
+      <div className="row">
+        <a className="btn btn-primary" href={url} rel="noopener noreferrer">
+          Go now
+        </a>
+        {!stopped && (
+          <button type="button" className="btn btn-ghost" onClick={() => setStopped(true)}>
+            Stay here
+          </button>
+        )}
+        <CopyButton value={url} />
+      </div>
+    </div>
   )
 }
 

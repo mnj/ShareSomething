@@ -677,6 +677,11 @@ export interface components {
             passphrase_verifier?: string | null;
             payload?: null | components["schemas"]["SharePayload"];
             policy: components["schemas"]["PolicyRule"][];
+            /**
+             * Format: int64
+             * @description Link shares: open the target automatically after showing it for this many seconds (0-60).
+             */
+            redirect_secs?: number | null;
             require_owner_mfa?: boolean;
             slug: components["schemas"]["SlugRequest"];
             title?: string | null;
@@ -896,6 +901,12 @@ export interface components {
             } | null;
             kind?: null | components["schemas"]["ShareKind"];
             passphrase_required: boolean;
+            /**
+             * Format: int64
+             * @description Link shares: open the target after this many seconds. The page may also open the share
+             *     without a Reveal click, but only when it has no view limit and no passphrase.
+             */
+            redirect_secs?: number | null;
             slug: string;
             status: components["schemas"]["AccessStatus"];
             title?: string | null;
@@ -946,6 +957,11 @@ export interface components {
             max_views?: number | null;
             passphrase_required: boolean;
             policy: components["schemas"]["PolicyRule"][];
+            /**
+             * Format: int64
+             * @description Link shares: auto-redirect delay in seconds.
+             */
+            redirect_secs?: number | null;
             require_owner_mfa: boolean;
             slug: string;
             slug_generator: string;
@@ -996,6 +1012,11 @@ export interface components {
              */
             max_views?: number | null;
             policy?: components["schemas"]["PolicyRule"][] | null;
+            /**
+             * Format: int64
+             * @description Link shares: seconds before auto-redirect (0-60); -1 turns redirecting off.
+             */
+            redirect_secs?: number | null;
             require_owner_mfa?: boolean | null;
             /** @description Revoke now: content is wiped immediately. */
             revoke?: boolean;

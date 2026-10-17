@@ -70,7 +70,9 @@ Migrations live in `backend/migrations/`. Add a new numbered file; never edit an
    *after* the passphrase/verifier check passes, so a typo can't burn a read-once share and
    concurrent opens can't both win the last view.
 3. **`GET` never consumes a view.** Link-preview bots must not burn shares; content is released only
-   by `POST /open` after an explicit Reveal click.
+   by `POST /open` after an explicit Reveal click. The one exception is redirect links
+   (`redirect_secs`), which open without a click, and only when they have no view limit and no
+   passphrase. Mail scanners run JavaScript, so a limited link must keep the click.
 4. **E2E shares: the server never receives plaintext, the DEK or the passphrase.** The create
    handler rejects `payload`/`passphrase` for `enc_mode = e2e`. Before open, only `enc_meta.kdf` is
    exposed (never `wrapped_key`), so the passphrase can't be brute-forced offline without spending

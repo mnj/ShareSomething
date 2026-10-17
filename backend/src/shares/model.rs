@@ -193,6 +193,8 @@ pub struct CreateShareRequest {
     pub passphrase_verifier: Option<String>,
     /// File shares: plaintext size of each file, in manifest order. Upload chunks afterwards.
     pub files: Option<Vec<FileSpec>>,
+    /// Link shares: open the target automatically after showing it for this many seconds (0-60).
+    pub redirect_secs: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -227,6 +229,8 @@ pub struct UpdateShareRequest {
     pub max_views: Option<i64>,
     pub require_owner_mfa: Option<bool>,
     pub policy: Option<Vec<PolicyRule>>,
+    /// Link shares: seconds before auto-redirect (0-60); -1 turns redirecting off.
+    pub redirect_secs: Option<i64>,
     /// Revoke now: content is wiped immediately.
     #[serde(default)]
     pub revoke: bool,
@@ -265,6 +269,8 @@ pub struct ShareSummary {
     pub entropy_bits: f64,
     /// File share whose upload hasn't been finalised yet; not openable.
     pub upload_pending: bool,
+    /// Link shares: auto-redirect delay in seconds.
+    pub redirect_secs: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -294,6 +300,9 @@ pub struct ShareInfo {
     pub kdf: Option<Value>,
     pub views_left: Option<i64>,
     pub expires_at: Option<i64>,
+    /// Link shares: open the target after this many seconds. The page may also open the share
+    /// without a Reveal click, but only when it has no view limit and no passphrase.
+    pub redirect_secs: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]

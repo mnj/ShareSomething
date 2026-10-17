@@ -70,6 +70,22 @@ fn summary(state: &AppState, row: &ShareRow, policy: Vec<PolicyRule>) -> ShareSu
         policy,
         entropy_bits: state.slugs.get(&row.slug_generator).map(|g| g.entropy_bits(&opts)).unwrap_or(0.0),
         upload_pending: row.upload_pending,
+        redirect_secs: row.redirect_secs,
+    }
+}
+
+const MAX_REDIRECT_SECS: i64 = 60;
+
+/// Auto-redirect only makes sense for link shares. `allow_off` permits -1 (turn off, for edits).
+fn validate_redirect(kind: ShareKind, secs: Option<i64>, allow_off: bool) -> AppResult<()> {
+    match secs {
+        None => Ok(()),
+        Some(-1) if allow_off => Ok(()),
+        Some(_) if kind != ShareKind::Link => Err(AppError::BadRequest("redirect only applies to link shares".into())),
+        Some(s) if (0..=MAX_REDIRECT_SECS).contains(&s) => Ok(()),
+        Some(_) => Err(AppError::BadRequest(format!(
+            "redirect delay must be 0-{MAX_REDIRECT_SECS} seconds"
+        ))),
     }
 }
 
@@ -185,6 +201,7 @@ async fn create_share(
 ) -> AppResult<(StatusCode, Json<CreateShareResponse>)> {
     let title = validate_title(req.title)?;
     let file_sizes = validate_file_specs(&state, req.kind, req.files.as_deref())?;
+    validate_redirect(req.kind, req.redirect_secs, false)?;
     let rules = validate_policy(&state, req.policy)?;
     validate_mfa_toggle(&state, req.require_owner_mfa).await?;
     if req.max_views.is_some_and(|m| !(1..=MAX_VIEWS).contains(&m)) {
@@ -290,8 +307,8 @@ async fn create_share(
         let res = sqlx::query(
             "INSERT INTO shares (id, slug, slug_generator, slug_opts, kind, title, enc_mode, enc_meta, ciphertext,
                 passphrase_required, passphrase_verifier, require_owner_mfa, max_views, expires_at, created_at,
-                upload_pending, upload_dek, upload_token_hash)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                upload_pending, upload_dek, upload_token_hash, redirect_secs)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&candidate)
@@ -311,6 +328,7 @@ async fn create_share(
         .bind(is_files)
         .bind(&upload_dek)
         .bind(upload_token.as_deref().map(|t| sha256(t.as_bytes())))
+        .bind(req.redirect_secs)
         .execute(&mut *tx)
         .await;
         match res {
@@ -390,8 +408,13 @@ async fn update_share(
     if let Some(m) = req.require_owner_mfa {
         validate_mfa_toggle(&state, m).await?;
     }
-    let edits =
-        req.title.is_some() || req.expires_at.is_some() || req.max_views.is_some() || req.require_owner_mfa.is_some() || policy.is_some();
+    validate_redirect(row.kind(), req.redirect_secs, true)?;
+    let edits = req.title.is_some()
+        || req.expires_at.is_some()
+        || req.max_views.is_some()
+        || req.require_owner_mfa.is_some()
+        || req.redirect_secs.is_some()
+        || policy.is_some();
     if edits && (row.ciphertext.is_none() || row.revoked_at.is_some() || row.burned_at.is_some()) {
         return Err(AppError::Conflict("this share's content is gone; it can't be changed".into()));
     }
@@ -436,6 +459,13 @@ async fn update_share(
     if let Some(m) = req.require_owner_mfa {
         sqlx::query("UPDATE shares SET require_owner_mfa = ? WHERE id = ?")
             .bind(m)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(secs) = req.redirect_secs {
+        sqlx::query("UPDATE shares SET redirect_secs = ? WHERE id = ?")
+            .bind((secs >= 0).then_some(secs))
             .bind(&id)
             .execute(&mut *tx)
             .await?;
@@ -590,6 +620,7 @@ async fn share_info(
         kdf: if visible { public_kdf(&row) } else { None },
         views_left: if visible { row.views_left() } else { None },
         expires_at: if visible { row.expires_at } else { None },
+        redirect_secs: if visible { row.redirect_secs } else { None },
     }))
 }
 
