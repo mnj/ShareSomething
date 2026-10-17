@@ -1,0 +1,1536 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ShareSomething API",
+    "description": "",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Log in as the owner.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Log out and invalidate the current session.",
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Current owner session state.",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/step-up": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Re-confirm TOTP to open shares that require fresh owner MFA.",
+        "operationId": "step_up",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/s/{slug}": {
+      "get": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "What a visitor needs to do to open a share. Unknown, expired and burned shares all return 404.",
+        "operationId": "share_info",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareInfo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/s/{slug}/open": {
+      "post": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "Open a share: consumes one view and returns the content.",
+        "operationId": "open_share",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shares": {
+      "get": {
+        "tags": [
+          "shares"
+        ],
+        "summary": "List all shares (newest first).",
+        "operationId": "list_shares",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ShareSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "shares"
+        ],
+        "summary": "Create a share.",
+        "operationId": "create_share",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateShareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shares/{id}": {
+      "get": {
+        "tags": [
+          "shares"
+        ],
+        "summary": "Get one share's settings.",
+        "operationId": "get_share",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "shares"
+        ],
+        "summary": "Permanently delete a share and its access log.",
+        "operationId": "delete_share",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "shares"
+        ],
+        "summary": "Change a share's title, limits or policy, or revoke it.",
+        "operationId": "update_share",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateShareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shares/{id}/log": {
+      "get": {
+        "tags": [
+          "shares"
+        ],
+        "summary": "Access log for a share, newest first.",
+        "operationId": "share_log",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccessLogEntry"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/slug-generators": {
+      "get": {
+        "tags": [
+          "shares"
+        ],
+        "summary": "Enabled link generators and their options.",
+        "operationId": "list_generators",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GeneratorInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/slug-generators/{id}/preview": {
+      "post": {
+        "tags": [
+          "shares"
+        ],
+        "summary": "Generate an example link without reserving it.",
+        "operationId": "preview_slug",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccessLogEntry": {
+        "type": "object",
+        "required": [
+          "ts",
+          "ip",
+          "outcome"
+        ],
+        "properties": {
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "identity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ip": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AccessStatus": {
+        "type": "string",
+        "enum": [
+          "ready",
+          "need_passphrase",
+          "need_owner_login",
+          "need_owner_mfa",
+          "need_auth",
+          "denied"
+        ]
+      },
+      "Choice": {
+        "type": "object",
+        "required": [
+          "value",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateShareRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "enc_mode",
+          "slug",
+          "policy"
+        ],
+        "properties": {
+          "ciphertext": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E2E mode: base64 ciphertext (nonce || AES-GCM ciphertext of the payload JSON)."
+          },
+          "enc_meta": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "E2E mode: client encryption metadata (algorithm, KDF params, wrapped key).",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "enc_mode": {
+            "$ref": "#/components/schemas/EncMode"
+          },
+          "expires_in_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ShareKind"
+          },
+          "max_views": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Destroy after this many successful opens (1 = read once)."
+          },
+          "passphrase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Server mode: optional passphrase mixed into the key."
+          },
+          "passphrase_verifier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E2E mode with passphrase: base64 verifier derived from the passphrase."
+          },
+          "payload": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SharePayload",
+                "description": "Server mode: plaintext content."
+              }
+            ]
+          },
+          "policy": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            }
+          },
+          "require_owner_mfa": {
+            "type": "boolean"
+          },
+          "slug": {
+            "$ref": "#/components/schemas/SlugRequest"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CredentialField": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean",
+            "description": "Masked until revealed in the UI."
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "EncMode": {
+        "type": "string",
+        "enum": [
+          "e2e",
+          "server"
+        ]
+      },
+      "ErrorBody": {
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Stable machine-readable code."
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "GeneratorInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "description",
+          "user_supplied",
+          "options"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OptionField"
+            }
+          },
+          "user_supplied": {
+            "type": "boolean",
+            "description": "The slug text itself comes from the user (e.g. vanity slugs) rather than randomness."
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "totp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Required when TOTP is enabled."
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "required": [
+          "authenticated",
+          "initialised",
+          "totp_enabled"
+        ],
+        "properties": {
+          "authenticated": {
+            "type": "boolean"
+          },
+          "initialised": {
+            "type": "boolean"
+          },
+          "mfa_valid_until": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix time until which the last TOTP step-up satisfies \"require owner MFA\" shares."
+          },
+          "totp_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "OpenRequest": {
+        "type": "object",
+        "properties": {
+          "passphrase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Server mode passphrase."
+          },
+          "passphrase_verifier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E2E mode passphrase verifier (base64)."
+          }
+        }
+      },
+      "OpenResponse": {
+        "type": "object",
+        "required": [
+          "kind",
+          "enc_mode",
+          "burned"
+        ],
+        "properties": {
+          "burned": {
+            "type": "boolean",
+            "description": "True when this open used the last view and the content has been destroyed."
+          },
+          "ciphertext": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E2E mode: base64 ciphertext to decrypt in the browser."
+          },
+          "enc_meta": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "enc_mode": {
+            "$ref": "#/components/schemas/EncMode"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ShareKind"
+          },
+          "payload": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SharePayload",
+                "description": "Server mode: decrypted content."
+              }
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "views_left": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "OptionField": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OptionKind"
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "label"
+            ],
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "OptionKind": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "min",
+              "max",
+              "default",
+              "type"
+            ],
+            "properties": {
+              "default": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "max": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "min": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "int"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "choices",
+              "default",
+              "type"
+            ],
+            "properties": {
+              "choices": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Choice"
+                }
+              },
+              "default": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "select"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "placeholder",
+              "pattern",
+              "type"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "placeholder": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "PolicyRule": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Rule"
+          },
+          {
+            "type": "object",
+            "required": [
+              "group"
+            ],
+            "properties": {
+              "group": {
+                "$ref": "#/components/schemas/RuleGroup"
+              }
+            }
+          }
+        ]
+      },
+      "PreviewRequest": {
+        "type": "object",
+        "properties": {
+          "options": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PreviewResponse": {
+        "type": "object",
+        "required": [
+          "slug",
+          "url",
+          "entropy_bits"
+        ],
+        "properties": {
+          "entropy_bits": {
+            "type": "number",
+            "format": "double"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "Rule": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Anyone with the link.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "everyone"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The signed-in owner.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "owner"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Client IP within any of these networks (CIDR or bare IP, v4/v6).",
+            "required": [
+              "cidrs",
+              "type"
+            ],
+            "properties": {
+              "cidrs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ip"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Client country (ISO 3166-1 alpha-2), from a trusted Cloudflare header.",
+            "required": [
+              "countries",
+              "type"
+            ],
+            "properties": {
+              "countries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "country"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Verified email address. `methods` restricts how it is verified\n(`email_otp`, `oidc:<provider>`); empty allows any configured method.",
+            "required": [
+              "emails",
+              "type"
+            ],
+            "properties": {
+              "emails": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "methods": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "email"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Any verified address at one of these domains.",
+            "required": [
+              "domains",
+              "type"
+            ],
+            "properties": {
+              "domains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "methods": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "email_domain"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "RuleGroup": {
+        "type": "string",
+        "enum": [
+          "include",
+          "require",
+          "exclude"
+        ]
+      },
+      "ShareInfo": {
+        "type": "object",
+        "description": "What a visitor learns before opening a share. Details are hidden unless access is allowed.",
+        "required": [
+          "slug",
+          "status",
+          "auth_methods",
+          "passphrase_required"
+        ],
+        "properties": {
+          "auth_methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Acceptable sign-in methods when `status = need_auth` (empty = any)."
+          },
+          "enc_mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EncMode"
+              }
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "kdf": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "E2E: KDF parameters the browser needs to derive the passphrase verifier.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ShareKind"
+              }
+            ]
+          },
+          "passphrase_required": {
+            "type": "boolean"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AccessStatus"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "views_left": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "ShareKind": {
+        "type": "string",
+        "enum": [
+          "text",
+          "link",
+          "credential"
+        ]
+      },
+      "SharePayload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "text",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "url",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "link"
+                ]
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "fields",
+              "kind"
+            ],
+            "properties": {
+              "fields": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CredentialField"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "credential"
+                ]
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Decrypted share content. For E2E shares the browser encrypts exactly this JSON."
+      },
+      "ShareStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "expired",
+          "burned",
+          "revoked"
+        ]
+      },
+      "ShareSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "slug_generator",
+          "url",
+          "kind",
+          "enc_mode",
+          "passphrase_required",
+          "failed_attempts",
+          "require_owner_mfa",
+          "views",
+          "created_at",
+          "status",
+          "policy",
+          "entropy_bits"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "enc_mode": {
+            "$ref": "#/components/schemas/EncMode"
+          },
+          "entropy_bits": {
+            "type": "number",
+            "format": "double"
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "failed_attempts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Wrong passphrase attempts so far."
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ShareKind"
+          },
+          "max_views": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "passphrase_required": {
+            "type": "boolean"
+          },
+          "policy": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            }
+          },
+          "require_owner_mfa": {
+            "type": "boolean"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "slug_generator": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ShareStatus"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "description": "Link without any E2E key fragment."
+          },
+          "views": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SlugRequest": {
+        "type": "object",
+        "properties": {
+          "generator": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Generator id from `GET /api/slug-generators`; defaults to the configured default."
+          },
+          "options": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "StepUpRequest": {
+        "type": "object",
+        "required": [
+          "totp"
+        ],
+        "properties": {
+          "totp": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateShareRequest": {
+        "type": "object",
+        "properties": {
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix time; 0 removes the expiry."
+          },
+          "max_views": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "0 removes the view limit."
+          },
+          "policy": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            }
+          },
+          "require_owner_mfa": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "revoke": {
+            "type": "boolean",
+            "description": "Revoke now: content is wiped immediately."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Empty string clears the title."
+          }
+        }
+      }
+    }
+  }
+}

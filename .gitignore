@@ -1,8 +1,29 @@
-/target
-/data
-/backend/data
-node_modules
-/frontend/dist
-*.local
-.env
+# Rust
+/target/
+
+# Frontend
+node_modules/
+/frontend/dist/
+/frontend/dist-ssr/
+*.tsbuildinfo
+
+# Runtime data (SQLite DB, blobs, generated master.key) and local config/secrets
+/data/
+/backend/data/
 config.toml
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.sw?
+.DS_Store

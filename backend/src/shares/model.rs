@@ -135,7 +135,7 @@ pub struct SlugRequest {
     /// Generator id from `GET /api/slug-generators`; defaults to the configured default.
     pub generator: Option<String>,
     #[serde(default)]
-    #[schema(value_type = Object)]
+    #[schema(value_type = std::collections::HashMap<String, Value>)]
     pub options: Value,
 }
 
@@ -158,7 +158,7 @@ pub struct CreateShareRequest {
     /// E2E mode: base64 ciphertext (nonce || AES-GCM ciphertext of the payload JSON).
     pub ciphertext: Option<String>,
     /// E2E mode: client encryption metadata (algorithm, KDF params, wrapped key).
-    #[schema(value_type = Option<Object>)]
+    #[schema(value_type = Option<HashMap<String, Value>>)]
     pub enc_meta: Option<Value>,
     /// E2E mode with passphrase: base64 verifier derived from the passphrase.
     pub passphrase_verifier: Option<String>,
@@ -234,7 +234,7 @@ pub struct ShareInfo {
     pub enc_mode: Option<EncMode>,
     pub passphrase_required: bool,
     /// E2E: KDF parameters the browser needs to derive the passphrase verifier.
-    #[schema(value_type = Option<Object>)]
+    #[schema(value_type = Option<HashMap<String, Value>>)]
     pub kdf: Option<Value>,
     pub views_left: Option<i64>,
     pub expires_at: Option<i64>,
@@ -257,7 +257,7 @@ pub struct OpenResponse {
     pub payload: Option<SharePayload>,
     /// E2E mode: base64 ciphertext to decrypt in the browser.
     pub ciphertext: Option<String>,
-    #[schema(value_type = Option<Object>)]
+    #[schema(value_type = Option<HashMap<String, Value>>)]
     pub enc_meta: Option<Value>,
     pub views_left: Option<i64>,
     /// True when this open used the last view and the content has been destroyed.
@@ -277,7 +277,7 @@ pub struct AccessLogEntry {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct PreviewRequest {
     #[serde(default)]
-    #[schema(value_type = Object)]
+    #[schema(value_type = std::collections::HashMap<String, Value>)]
     pub options: Value,
 }
 
