@@ -175,6 +175,80 @@
         }
       }
     },
+    "/api/s/{slug}/files/{idx}/chunks/{n}": {
+      "get": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "Download chunk `n` of file `idx` with the token from a successful open.\nE2E shares return ciphertext (decrypt in the browser); server shares return plaintext.",
+        "operationId": "download_chunk",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "x-download-token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/s/{slug}/open": {
       "post": {
         "tags": [
@@ -281,7 +355,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ShareSummary"
+                  "$ref": "#/components/schemas/CreateShareResponse"
                 }
               }
             }
@@ -419,6 +493,142 @@
             }
           },
           "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shares/{id}/files/{idx}/chunks/{n}": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload chunk `n` of file `idx`. Chunks of a file must be sent in order; re-sending a chunk\nreplaces it and everything after it.",
+        "operationId": "upload_chunk",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "x-upload-token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shares/{id}/finalize": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Mark a file share's upload as complete; it becomes openable.",
+        "operationId": "finalize_upload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-upload-token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareSummary"
+                }
+              }
+            }
+          },
+          "409": {
             "description": "",
             "content": {
               "application/json": {
@@ -644,6 +854,16 @@
             ],
             "format": "int64"
           },
+          "files": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/FileSpec"
+            },
+            "description": "File shares: plaintext size of each file, in manifest order. Upload chunks afterwards."
+          },
           "kind": {
             "$ref": "#/components/schemas/ShareKind"
           },
@@ -700,6 +920,31 @@
           }
         }
       },
+      "CreateShareResponse": {
+        "type": "object",
+        "required": [
+          "share",
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileUploadInfo"
+            }
+          },
+          "share": {
+            "$ref": "#/components/schemas/ShareSummary"
+          },
+          "upload_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File shares: send as `x-upload-token` with every chunk and with finalize."
+          }
+        }
+      },
       "CredentialField": {
         "type": "object",
         "required": [
@@ -739,6 +984,74 @@
           },
           "message": {
             "type": "string"
+          }
+        }
+      },
+      "FileEntry": {
+        "type": "object",
+        "required": [
+          "name",
+          "size"
+        ],
+        "properties": {
+          "mime": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FileSpec": {
+        "type": "object",
+        "required": [
+          "size"
+        ],
+        "properties": {
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FileUploadInfo": {
+        "type": "object",
+        "required": [
+          "idx",
+          "size",
+          "chunk_count",
+          "chunk_size"
+        ],
+        "properties": {
+          "chunk_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "chunk_size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Plaintext bytes per chunk (the last chunk may be shorter).",
+            "minimum": 0
+          },
+          "idx": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -855,6 +1168,20 @@
               "null"
             ],
             "description": "E2E mode: base64 ciphertext to decrypt in the browser."
+          },
+          "download_expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "download_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File shares: send as `x-download-token` to fetch chunks (valid until `download_expires_at`)."
           },
           "enc_meta": {
             "type": [
@@ -1276,7 +1603,8 @@
         "enum": [
           "text",
           "link",
-          "credential"
+          "credential",
+          "files"
         ]
       },
       "SharePayload": {
@@ -1349,6 +1677,34 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Manifest of a file share; file contents are fetched separately in chunks.",
+            "required": [
+              "files",
+              "kind"
+            ],
+            "properties": {
+              "files": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FileEntry"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "files"
+                ]
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
           }
         ],
         "description": "Decrypted share content. For E2E shares the browser encrypts exactly this JSON."
@@ -1356,6 +1712,7 @@
       "ShareStatus": {
         "type": "string",
         "enum": [
+          "uploading",
           "active",
           "expired",
           "burned",
@@ -1378,7 +1735,8 @@
           "created_at",
           "status",
           "policy",
-          "entropy_bits"
+          "entropy_bits",
+          "upload_pending"
         ],
         "properties": {
           "created_at": {
@@ -1443,6 +1801,10 @@
               "string",
               "null"
             ]
+          },
+          "upload_pending": {
+            "type": "boolean",
+            "description": "File share whose upload hasn't been finalised yet; not openable."
           },
           "url": {
             "type": "string",

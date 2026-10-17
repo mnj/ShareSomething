@@ -4,14 +4,18 @@ import { Link, useParams } from 'react-router-dom'
 import { api, ApiError, unwrap, type Schemas, type ShareInfo, type SharePayload } from '../api/client'
 import { CopyButton } from '../components/CopyButton'
 import { ErrorNote } from '../components/ErrorNote'
-import { decryptShare, derivePassphraseKeys, keyFromFragment, toB64, type E2eMeta, type KdfParams } from '../crypto/e2e'
+import { decryptPayload, derivePassphraseKeys, keyFromFragment, toB64, unwrapDek, type E2eMeta, type KdfParams } from '../crypto/e2e'
+import { downloadFile, formatBytes, saveBlob, type Progress } from '../lib/files'
 import { formatRelative } from '../lib/format'
 
 interface Revealed {
+  slug: string
   payload: SharePayload
   title?: string | null
   burned: boolean
   viewsLeft?: number | null
+  /** File shares: token for fetching chunks, and the content key for E2E. */
+  download?: { token: string; expiresAt: number; dek?: Uint8Array<ArrayBuffer> }
 }
 
 export function ShareView() {
@@ -147,7 +151,7 @@ function Gate({ info, fragmentKey, onRevealed }: { info: ShareInfo; fragmentKey?
 }
 
 function kindLabel(kind?: Schemas['ShareKind'] | null) {
-  return kind === 'link' ? 'Link' : kind === 'credential' ? 'Credential' : 'Text'
+  return kind === 'link' ? 'Link' : kind === 'credential' ? 'Credential' : kind === 'files' ? 'Files' : 'Text'
 }
 
 async function openShare(info: ShareInfo, passphrase: string, fragmentKey?: string): Promise<Revealed> {
@@ -161,20 +165,29 @@ async function openShare(info: ShareInfo, passphrase: string, fragmentKey?: stri
   const body = info.enc_mode === 'server' ? { passphrase: passphrase || null } : { passphrase_verifier: verifier }
   const res = await unwrap(api.POST('/api/s/{slug}/open', { params: { path: { slug: info.slug } }, body }))
   let payload: SharePayload
+  let dek: Uint8Array<ArrayBuffer> | undefined
   if (res.enc_mode === 'server') {
     payload = res.payload!
   } else {
-    payload = await decryptShare<SharePayload>(res.ciphertext!, res.enc_meta as unknown as E2eMeta, { fragmentKey, kek })
+    dek = await unwrapDek(res.enc_meta as unknown as E2eMeta, { fragmentKey, kek })
+    payload = await decryptPayload<SharePayload>(res.ciphertext!, dek)
   }
-  return { payload, title: res.title, burned: res.burned, viewsLeft: res.views_left }
+  const download = res.download_token ? { token: res.download_token, expiresAt: res.download_expires_at ?? 0, dek } : undefined
+  return { slug: info.slug, payload, title: res.title, burned: res.burned, viewsLeft: res.views_left, download }
 }
 
 function RevealedView({ r }: { r: Revealed }) {
   return (
     <section className="card stack narrow">
       {r.title && <h1>{r.title}</h1>}
-      {r.burned && <p className="note note-warn">This share has now been destroyed. Copy what you need before you leave this page.</p>}
-      <Payload p={r.payload} />
+      {r.burned && (
+        <p className="note note-warn">
+          {r.download
+            ? `This share has now been destroyed. Download the files before ${new Date(r.download.expiresAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}; after that they're gone.`
+            : 'This share has now been destroyed. Copy what you need before you leave this page.'}
+        </p>
+      )}
+      {r.payload.kind === 'files' && r.download ? <FileList r={r} files={r.payload.files} note={r.payload.note} /> : <Payload p={r.payload} />}
     </section>
   )
 }
@@ -216,6 +229,8 @@ function Payload({ p }: { p: SharePayload }) {
         </div>
       )
     }
+    case 'files':
+      return null
     case 'credential':
       return (
         <div className="stack">
@@ -226,6 +241,66 @@ function Payload({ p }: { p: SharePayload }) {
         </div>
       )
   }
+}
+
+function FileList({ r, files, note }: { r: Revealed; files: Schemas['FileEntry'][]; note?: string | null }) {
+  const [progress, setProgress] = useState<Record<number, Progress | 'done'>>({})
+  const [error, setError] = useState<unknown>(null)
+  const fetchOne = async (i: number) => {
+    setError(null)
+    try {
+      const blob = await downloadFile(r.slug, r.download!.token, i, files[i], r.download!.dek, (p) => setProgress((s) => ({ ...s, [i]: p })))
+      saveBlob(blob, files[i].name)
+      setProgress((s) => ({ ...s, [i]: 'done' }))
+    } catch (e) {
+      setError(e)
+      setProgress((s) => {
+        const next = { ...s }
+        delete next[i]
+        return next
+      })
+    }
+  }
+  const busy = Object.values(progress).some((p) => p !== 'done')
+  return (
+    <div className="stack">
+      <ul className="file-list">
+        {files.map((f, i) => {
+          const p = progress[i]
+          return (
+            <li key={i}>
+              <span className="file-name">{f.name}</span>
+              <span className="hint">{formatBytes(f.size)}</span>
+              {p === 'done' ? (
+                <span className="badge badge-ok">saved</span>
+              ) : p ? (
+                <progress className="progress small" value={p.done} max={p.total || 1} aria-label={`Downloading ${f.name}`} />
+              ) : (
+                <button type="button" className="btn btn-small" disabled={busy} onClick={() => fetchOne(i)}>
+                  Download
+                </button>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      {files.length > 1 && (
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={async () => {
+            for (let i = 0; i < files.length; i++) if (progress[i] !== 'done') await fetchOne(i)
+          }}
+        >
+          Download all
+        </button>
+      )}
+      <ErrorNote error={error} />
+      {note && <p className="pre-wrap">{note}</p>}
+      <p className="hint">{r.download?.dek ? 'Files are decrypted in your browser as they download.' : 'Files are decrypted by the server as they download.'}</p>
+    </div>
+  )
 }
 
 function CredentialValue({ label, value, secret }: { label: string; value: string; secret: boolean }) {

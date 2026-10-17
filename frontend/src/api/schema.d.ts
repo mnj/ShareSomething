@@ -89,6 +89,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/s/{slug}/files/{idx}/chunks/{n}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download chunk `n` of file `idx` with the token from a successful open.
+         *     E2E shares return ciphertext (decrypt in the browser); server shares return plaintext.
+         */
+        get: operations["download_chunk"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/s/{slug}/open": {
         parameters: {
             query?: never;
@@ -141,6 +161,43 @@ export interface paths {
         head?: never;
         /** Change a share's title, limits or policy, or revoke it. */
         patch: operations["update_share"];
+        trace?: never;
+    };
+    "/api/shares/{id}/files/{idx}/chunks/{n}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upload chunk `n` of file `idx`. Chunks of a file must be sent in order; re-sending a chunk
+         *     replaces it and everything after it.
+         */
+        put: operations["upload_chunk"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/shares/{id}/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a file share's upload as complete; it becomes openable. */
+        post: operations["finalize_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/shares/{id}/log": {
@@ -223,6 +280,8 @@ export interface components {
             enc_mode: components["schemas"]["EncMode"];
             /** Format: int64 */
             expires_in_secs?: number | null;
+            /** @description File shares: plaintext size of each file, in manifest order. Upload chunks afterwards. */
+            files?: components["schemas"]["FileSpec"][] | null;
             kind: components["schemas"]["ShareKind"];
             /**
              * Format: int64
@@ -239,6 +298,12 @@ export interface components {
             slug: components["schemas"]["SlugRequest"];
             title?: string | null;
         };
+        CreateShareResponse: {
+            files: components["schemas"]["FileUploadInfo"][];
+            share: components["schemas"]["ShareSummary"];
+            /** @description File shares: send as `x-upload-token` with every chunk and with finalize. */
+            upload_token?: string | null;
+        };
         CredentialField: {
             label: string;
             /** @description Masked until revealed in the UI. */
@@ -251,6 +316,29 @@ export interface components {
             /** @description Stable machine-readable code. */
             error: string;
             message: string;
+        };
+        FileEntry: {
+            mime?: string | null;
+            name: string;
+            /** Format: int64 */
+            size: number;
+        };
+        FileSpec: {
+            /** Format: int64 */
+            size: number;
+        };
+        FileUploadInfo: {
+            /** Format: int64 */
+            chunk_count: number;
+            /**
+             * Format: int64
+             * @description Plaintext bytes per chunk (the last chunk may be shorter).
+             */
+            chunk_size: number;
+            /** Format: int32 */
+            idx: number;
+            /** Format: int64 */
+            size: number;
         };
         GeneratorInfo: {
             description: string;
@@ -286,6 +374,10 @@ export interface components {
             burned: boolean;
             /** @description E2E mode: base64 ciphertext to decrypt in the browser. */
             ciphertext?: string | null;
+            /** Format: int64 */
+            download_expires_at?: number | null;
+            /** @description File shares: send as `x-download-token` to fetch chunks (valid until `download_expires_at`). */
+            download_token?: string | null;
             enc_meta?: {
                 [key: string]: unknown;
             } | null;
@@ -381,7 +473,7 @@ export interface components {
             views_left?: number | null;
         };
         /** @enum {string} */
-        ShareKind: "text" | "link" | "credential";
+        ShareKind: "text" | "link" | "credential" | "files";
         /** @description Decrypted share content. For E2E shares the browser encrypts exactly this JSON. */
         SharePayload: {
             /** @enum {string} */
@@ -397,9 +489,14 @@ export interface components {
             /** @enum {string} */
             kind: "credential";
             note?: string | null;
+        } | {
+            files: components["schemas"]["FileEntry"][];
+            /** @enum {string} */
+            kind: "files";
+            note?: string | null;
         };
         /** @enum {string} */
-        ShareStatus: "active" | "expired" | "burned" | "revoked";
+        ShareStatus: "uploading" | "active" | "expired" | "burned" | "revoked";
         ShareSummary: {
             /** Format: int64 */
             created_at: number;
@@ -424,6 +521,8 @@ export interface components {
             slug_generator: string;
             status: components["schemas"]["ShareStatus"];
             title?: string | null;
+            /** @description File share whose upload hasn't been finalised yet; not openable. */
+            upload_pending: boolean;
             /** @description Link without any E2E key fragment. */
             url: string;
             /** Format: int64 */
@@ -595,6 +694,39 @@ export interface operations {
             };
         };
     };
+    download_chunk: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-download-token": string;
+            };
+            path: {
+                slug: string;
+                idx: number;
+                n: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     open_share: {
         parameters: {
             query?: never;
@@ -673,7 +805,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ShareSummary"];
+                    "application/json": components["schemas"]["CreateShareResponse"];
                 };
             };
             400: {
@@ -774,6 +906,80 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    upload_chunk: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-upload-token": string;
+            };
+            path: {
+                id: string;
+                idx: number;
+                n: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": number[];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    finalize_upload: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-upload-token": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareSummary"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

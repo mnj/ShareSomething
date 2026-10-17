@@ -123,9 +123,30 @@ impl TestApp {
     }
 
     async fn create(&self, cookie: &str, body: Value) -> Value {
+        self.create_full(cookie, body).await["share"].clone()
+    }
+
+    async fn create_full(&self, cookie: &str, body: Value) -> Value {
         let r = self.post("/api/shares", body, Some(cookie)).await;
         assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
         r.body
+    }
+
+    /// Raw-bytes request (file chunks); returns status and body bytes.
+    async fn raw(&self, method: &str, uri: &str, body: Vec<u8>, cookie: Option<&str>, headers: &[(&str, &str)]) -> (StatusCode, Vec<u8>) {
+        let mut b = Request::builder().method(method).uri(uri).header(header::ORIGIN, ORIGIN);
+        if let Some(c) = cookie {
+            b = b.header(header::COOKIE, c);
+        }
+        for (k, v) in headers {
+            b = b.header(*k, *v);
+        }
+        let mut req = b.body(Body::from(body)).unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo("198.51.100.1:5000".parse::<SocketAddr>().unwrap()));
+        let res = self.app.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        (status, res.into_body().collect().await.unwrap().to_bytes().to_vec())
     }
 }
 
@@ -469,4 +490,255 @@ async fn openapi_and_health() {
     ] {
         assert!(spec["paths"].get(p).is_some(), "missing {p}");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// File shares
+// ---------------------------------------------------------------------------------------------
+
+const CHUNK: usize = crate::blobs::CHUNK_SIZE;
+
+fn file_bytes(len: usize, seed: u8) -> Vec<u8> {
+    (0..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed)).collect()
+}
+
+fn server_files_share(sizes: &[usize]) -> Value {
+    let manifest: Vec<Value> = sizes
+        .iter()
+        .enumerate()
+        .map(|(i, s)| json!({"name": format!("f{i}.bin"), "size": s}))
+        .collect();
+    json!({
+        "kind": "files", "enc_mode": "server", "slug": {}, "max_views": 1,
+        "policy": [{"group": "include", "type": "everyone"}],
+        "payload": {"kind": "files", "files": manifest},
+        "files": sizes.iter().map(|s| json!({"size": s})).collect::<Vec<_>>(),
+    })
+}
+
+async fn upload_all(t: &TestApp, c: &str, created: &Value, files: &[Vec<u8>], e2e_overhead: bool) {
+    let id = created["share"]["id"].as_str().unwrap();
+    let token = created["upload_token"].as_str().unwrap();
+    for (idx, data) in files.iter().enumerate() {
+        let chunks = created["files"][idx]["chunk_count"].as_u64().unwrap() as usize;
+        for n in 0..chunks {
+            let mut part = data[(n * CHUNK).min(data.len())..((n + 1) * CHUNK).min(data.len())].to_vec();
+            if e2e_overhead {
+                part.extend_from_slice(&[0xEE; 28]); // stand-in for nonce + tag
+            }
+            let uri = format!("/api/shares/{id}/files/{idx}/chunks/{n}");
+            let (st, body) = t.raw("PUT", &uri, part, Some(c), &[("x-upload-token", token)]).await;
+            assert_eq!(st, StatusCode::NO_CONTENT, "{}", String::from_utf8_lossy(&body));
+        }
+    }
+}
+
+async fn download(t: &TestApp, slug: &str, token: &str, idx: usize, chunks: usize) -> Vec<u8> {
+    let mut out = vec![];
+    for n in 0..chunks {
+        let (st, body) = t
+            .raw(
+                "GET",
+                &format!("/api/s/{slug}/files/{idx}/chunks/{n}"),
+                vec![],
+                None,
+                &[("x-download-token", token)],
+            )
+            .await;
+        assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        out.extend(body);
+    }
+    out
+}
+
+#[tokio::test]
+async fn server_file_share_round_trip_and_burn() {
+    let t = TestApp::new().await;
+    let c = t.login().await;
+    let files = vec![file_bytes(CHUNK + CHUNK / 2, 1), vec![]];
+    let created = t.create_full(&c, server_files_share(&[files[0].len(), 0])).await;
+    assert_eq!(created["share"]["status"], "uploading");
+    assert_eq!(created["files"][0]["chunk_count"], 2);
+    assert_eq!(created["files"][1]["chunk_count"], 1);
+    let slug = created["share"]["slug"].as_str().unwrap().to_string();
+    let id = created["share"]["id"].as_str().unwrap().to_string();
+
+    // Not openable until finalised.
+    assert_eq!(t.get(&format!("/api/s/{slug}"), None).await.status, StatusCode::NOT_FOUND);
+    let fin = format!("/api/shares/{id}/finalize");
+    let token = created["upload_token"].as_str().unwrap();
+    let (st, _) = t.raw("POST", &fin, vec![], Some(&c), &[("x-upload-token", token)]).await;
+    assert_eq!(st, StatusCode::CONFLICT, "incomplete upload must not finalise");
+
+    upload_all(&t, &c, &created, &files, false).await;
+    let (st, _) = t.raw("POST", &fin, vec![], Some(&c), &[("x-upload-token", "wrong")]).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let (st, body) = t.raw("POST", &fin, vec![], Some(&c), &[("x-upload-token", token)]).await;
+    assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+
+    // Stored blobs are encrypted.
+    let blob = std::fs::read(t.state.cfg.data_dir.join("blobs").join(&id).join("0.bin")).unwrap();
+    assert_eq!(blob.len(), files[0].len() + 2 * 40);
+    assert!(!blob.windows(64).any(|w| w == &files[0][..64]));
+
+    let open = t.post(&format!("/api/s/{slug}/open"), json!({}), None).await;
+    assert_eq!(open.status, StatusCode::OK, "{}", open.body);
+    assert_eq!(open.body["burned"], true);
+    assert_eq!(open.body["payload"]["files"][0]["name"], "f0.bin");
+    let dl = open.body["download_token"].as_str().unwrap();
+
+    // Downloads keep working after the burn, until the token expires.
+    assert_eq!(download(&t, &slug, dl, 0, 2).await, files[0]);
+    assert_eq!(download(&t, &slug, dl, 1, 1).await, Vec::<u8>::new());
+    let (st, _) = t
+        .raw(
+            "GET",
+            &format!("/api/s/{slug}/files/0/chunks/0"),
+            vec![],
+            None,
+            &[("x-download-token", "nope")],
+        )
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    assert_eq!(
+        t.post(&format!("/api/s/{slug}/open"), json!({}), None).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // Once the token has expired, the sweeper removes the blobs.
+    sqlx::query("UPDATE download_tokens SET expires_at = 0")
+        .execute(&t.state.db)
+        .await
+        .unwrap();
+    crate::jobs::sweep(&t.state).await.unwrap();
+    assert!(!t.state.cfg.data_dir.join("blobs").join(&id).exists());
+}
+
+#[tokio::test]
+async fn server_file_share_with_passphrase() {
+    let t = TestApp::new().await;
+    let c = t.login().await;
+    let data = file_bytes(1000, 7);
+    let mut body = server_files_share(&[data.len()]);
+    body["passphrase"] = json!("pw");
+    body["max_views"] = json!(2);
+    let created = t.create_full(&c, body).await;
+    upload_all(&t, &c, &created, std::slice::from_ref(&data), false).await;
+    let id = created["share"]["id"].as_str().unwrap();
+    let (st, _) = t
+        .raw(
+            "POST",
+            &format!("/api/shares/{id}/finalize"),
+            vec![],
+            Some(&c),
+            &[("x-upload-token", created["upload_token"].as_str().unwrap())],
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    let slug = created["share"]["slug"].as_str().unwrap();
+    let open = t.post(&format!("/api/s/{slug}/open"), json!({"passphrase": "pw"}), None).await;
+    assert_eq!(download(&t, slug, open.body["download_token"].as_str().unwrap(), 0, 1).await, data);
+}
+
+#[tokio::test]
+async fn upload_validation() {
+    let t = TestApp::new().await;
+    let c = t.login().await;
+    let created = t.create_full(&c, server_files_share(&[CHUNK + 10])).await;
+    let id = created["share"]["id"].as_str().unwrap();
+    let token = created["upload_token"].as_str().unwrap();
+    let (t, c) = (&t, c.as_str());
+    let put = |n: usize, len: usize| {
+        let uri = format!("/api/shares/{id}/files/0/chunks/{n}");
+        async move { t.raw("PUT", &uri, vec![0; len], Some(c), &[("x-upload-token", token)]).await.0 }
+    };
+    assert_eq!(put(1, 10).await, StatusCode::CONFLICT, "out of order");
+    assert_eq!(put(0, 10).await, StatusCode::BAD_REQUEST, "wrong size");
+    assert_eq!(put(0, CHUNK).await, StatusCode::NO_CONTENT);
+    assert_eq!(put(2, 10).await, StatusCode::BAD_REQUEST, "out of range");
+    assert_eq!(put(1, 10).await, StatusCode::NO_CONTENT);
+    let (st, _) = t
+        .raw(
+            "PUT",
+            &format!("/api/shares/{id}/files/0/chunks/0"),
+            vec![0; CHUNK],
+            Some(c),
+            &[("x-upload-token", "bad")],
+        )
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+
+    // Manifest must agree with declared sizes, and limits apply.
+    let mut bad = server_files_share(&[5]);
+    bad["files"] = json!([{"size": 6}]);
+    assert_eq!(t.post("/api/shares", bad, Some(c)).await.status, StatusCode::BAD_REQUEST);
+    let mut huge = server_files_share(&[1]);
+    huge["files"] = json!([{"size": 1u64 << 40}]);
+    huge["payload"]["files"][0]["size"] = json!(1u64 << 40);
+    assert_eq!(t.post("/api/shares", huge, Some(c)).await.status, StatusCode::BAD_REQUEST);
+    let mut text_with_files = public_text("x");
+    text_with_files["files"] = json!([{"size": 1}]);
+    assert_eq!(
+        t.post("/api/shares", text_with_files, Some(c)).await.status,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn e2e_file_share_stores_opaque_chunks_and_revoke_deletes_them() {
+    let t = TestApp::new().await;
+    let c = t.login().await;
+    let data = file_bytes(300, 3);
+    let created = t
+        .create_full(
+            &c,
+            json!({
+                "kind": "files", "enc_mode": "e2e", "slug": {},
+                "policy": [{"group": "include", "type": "everyone"}],
+                "ciphertext": B64.encode([1u8; 80]), "enc_meta": {"v": 1, "key": "fragment"},
+                "files": [{"size": data.len()}],
+            }),
+        )
+        .await;
+    upload_all(&t, &c, &created, std::slice::from_ref(&data), true).await;
+    let id = created["share"]["id"].as_str().unwrap();
+    let (st, _) = t
+        .raw(
+            "POST",
+            &format!("/api/shares/{id}/finalize"),
+            vec![],
+            Some(&c),
+            &[("x-upload-token", created["upload_token"].as_str().unwrap())],
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    let slug = created["share"]["slug"].as_str().unwrap();
+    let open = t.post(&format!("/api/s/{slug}/open"), json!({}), None).await;
+    let dl = open.body["download_token"].as_str().unwrap().to_string();
+    let mut expected = data.clone();
+    expected.extend_from_slice(&[0xEE; 28]);
+    assert_eq!(download(&t, slug, &dl, 0, 1).await, expected, "e2e chunks are returned untouched");
+
+    let r = t
+        .req(
+            "PATCH",
+            &format!("/api/shares/{id}"),
+            Some(json!({"revoke": true})),
+            Some(&c),
+            "198.51.100.1",
+            &[],
+        )
+        .await;
+    assert_eq!(r.body["status"], "revoked");
+    assert!(!t.state.cfg.data_dir.join("blobs").join(id).exists());
+    let (st, _) = t
+        .raw(
+            "GET",
+            &format!("/api/s/{slug}/files/0/chunks/0"),
+            vec![],
+            None,
+            &[("x-download-token", &dl)],
+        )
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "revoke kills outstanding downloads");
 }

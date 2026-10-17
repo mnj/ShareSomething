@@ -269,6 +269,7 @@ span.note-error {
   border-color: transparent;
 }
 .badge-warn,
+.badge-uploading,
 .badge-expired,
 .badge-burned {
   background: var(--warn-bg);
@@ -429,4 +430,51 @@ span.note-error {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--muted);
+  cursor: pointer;
+}
+.dropzone:hover,
+.dropzone:focus,
+.dropzone.dragging {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.file-list li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.file-list li:last-child {
+  border-bottom: 0;
+}
+.file-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--accent);
+}
+.progress.small {
+  width: 120px;
 }

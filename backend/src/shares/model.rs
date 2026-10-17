@@ -10,6 +10,7 @@ pub enum ShareKind {
     Text,
     Link,
     Credential,
+    Files,
 }
 
 impl ShareKind {
@@ -18,6 +19,7 @@ impl ShareKind {
             ShareKind::Text => "text",
             ShareKind::Link => "link",
             ShareKind::Credential => "credential",
+            ShareKind::Files => "files",
         }
     }
 
@@ -26,6 +28,7 @@ impl ShareKind {
             "text" => ShareKind::Text,
             "link" => ShareKind::Link,
             "credential" => ShareKind::Credential,
+            "files" => ShareKind::Files,
             _ => return None,
         })
     }
@@ -74,6 +77,20 @@ pub enum SharePayload {
         #[serde(default)]
         note: Option<String>,
     },
+    /// Manifest of a file share; file contents are fetched separately in chunks.
+    Files {
+        files: Vec<FileEntry>,
+        #[serde(default)]
+        note: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct FileEntry {
+    pub name: String,
+    pub size: u64,
+    #[serde(default)]
+    pub mime: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -91,6 +108,7 @@ impl SharePayload {
             SharePayload::Text { .. } => ShareKind::Text,
             SharePayload::Link { .. } => ShareKind::Link,
             SharePayload::Credential { .. } => ShareKind::Credential,
+            SharePayload::Files { .. } => ShareKind::Files,
         }
     }
 
@@ -120,6 +138,17 @@ impl SharePayload {
                     .any(|f| f.label.trim().is_empty() || f.label.len() > 200 || f.value.len() > 64 * 1024)
                 {
                     return Err("credential field labels are required (max 200 chars), values max 64 KiB".into());
+                }
+                if !note_ok(note) {
+                    return Err("note too long".into());
+                }
+            }
+            SharePayload::Files { files, note } => {
+                if files
+                    .iter()
+                    .any(|f| f.name.trim().is_empty() || f.name.len() > 255 || f.mime.as_ref().is_some_and(|m| m.len() > 255))
+                {
+                    return Err("file names are required (max 255 chars)".into());
                 }
                 if !note_ok(note) {
                     return Err("note too long".into());
@@ -162,6 +191,30 @@ pub struct CreateShareRequest {
     pub enc_meta: Option<Value>,
     /// E2E mode with passphrase: base64 verifier derived from the passphrase.
     pub passphrase_verifier: Option<String>,
+    /// File shares: plaintext size of each file, in manifest order. Upload chunks afterwards.
+    pub files: Option<Vec<FileSpec>>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct FileSpec {
+    pub size: u64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CreateShareResponse {
+    pub share: ShareSummary,
+    /// File shares: send as `x-upload-token` with every chunk and with finalize.
+    pub upload_token: Option<String>,
+    pub files: Vec<FileUploadInfo>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FileUploadInfo {
+    pub idx: u32,
+    pub size: u64,
+    pub chunk_count: u64,
+    /// Plaintext bytes per chunk (the last chunk may be shorter).
+    pub chunk_size: u64,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -182,6 +235,7 @@ pub struct UpdateShareRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ShareStatus {
+    Uploading,
     Active,
     Expired,
     Burned,
@@ -209,6 +263,8 @@ pub struct ShareSummary {
     pub status: ShareStatus,
     pub policy: Vec<PolicyRule>,
     pub entropy_bits: f64,
+    /// File share whose upload hasn't been finalised yet; not openable.
+    pub upload_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -262,6 +318,9 @@ pub struct OpenResponse {
     pub views_left: Option<i64>,
     /// True when this open used the last view and the content has been destroyed.
     pub burned: bool,
+    /// File shares: send as `x-download-token` to fetch chunks (valid until `download_expires_at`).
+    pub download_token: Option<String>,
+    pub download_expires_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]

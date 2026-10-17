@@ -2,6 +2,7 @@ mod admin;
 mod api;
 mod app;
 mod auth;
+mod blobs;
 mod config;
 mod crypto;
 mod db;

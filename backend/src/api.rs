@@ -19,7 +19,12 @@ use crate::{app::AppState, auth, error::AppError, shares, static_files};
 struct ApiDoc;
 
 pub fn api_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::with_openapi(ApiDoc::openapi()).nest("/api", auth::owner::router().merge(shares::handlers::router()))
+    OpenApiRouter::with_openapi(ApiDoc::openapi()).nest(
+        "/api",
+        auth::owner::router()
+            .merge(shares::handlers::router())
+            .merge(shares::files::router()),
+    )
 }
 
 pub fn openapi_json() -> String {
@@ -31,7 +36,8 @@ const CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; sty
 
 pub fn router(state: AppState) -> Router {
     let (api, _) = api_router().split_for_parts();
-    let body_limit = state.cfg.max_text_bytes * 2 + 64 * 1024;
+    // Big enough for a text payload (base64) or one file chunk.
+    let body_limit = (state.cfg.max_text_bytes * 2).max(crate::blobs::CHUNK_SIZE) + 64 * 1024;
     let mut app = api
         .layer(middleware::from_fn_with_state(state.clone(), origin_check))
         .layer(DefaultBodyLimit::max(body_limit))

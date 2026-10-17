@@ -29,6 +29,9 @@ pub struct ShareRow {
     pub created_at: i64,
     pub revoked_at: Option<i64>,
     pub burned_at: Option<i64>,
+    pub upload_pending: bool,
+    pub upload_dek: Option<Vec<u8>>,
+    pub upload_token_hash: Option<Vec<u8>>,
 }
 
 impl ShareRow {
@@ -43,6 +46,8 @@ impl ShareRow {
     pub fn status(&self, now: i64) -> ShareStatus {
         if self.revoked_at.is_some() {
             ShareStatus::Revoked
+        } else if self.upload_pending {
+            ShareStatus::Uploading
         } else if self.burned_at.is_some() || self.max_views.is_some_and(|m| self.views >= m) {
             ShareStatus::Burned
         } else if self.expires_at.is_some_and(|t| t <= now) {
@@ -58,7 +63,7 @@ impl ShareRow {
 
     pub fn state(&self, rules: Vec<PolicyRule>) -> ShareState {
         ShareState {
-            available: self.ciphertext.is_some() && self.revoked_at.is_none() && self.burned_at.is_none(),
+            available: self.ciphertext.is_some() && self.revoked_at.is_none() && self.burned_at.is_none() && !self.upload_pending,
             expires_at: self.expires_at,
             max_views: self.max_views,
             views: self.views,
@@ -136,7 +141,7 @@ pub async fn replace_rules(tx: &mut Transaction<'_, Sqlite>, share_id: &str, rul
 pub async fn consume_view(tx: &mut Transaction<'_, Sqlite>, id: &str) -> sqlx::Result<Option<i64>> {
     let row: Option<(i64,)> = sqlx::query_as(
         "UPDATE shares SET views = views + 1
-         WHERE id = ? AND ciphertext IS NOT NULL AND revoked_at IS NULL AND burned_at IS NULL
+         WHERE id = ? AND ciphertext IS NOT NULL AND revoked_at IS NULL AND burned_at IS NULL AND upload_pending = 0
            AND (max_views IS NULL OR views < max_views)
            AND (expires_at IS NULL OR expires_at > ?)
          RETURNING views",
@@ -161,6 +166,31 @@ pub async fn wipe(db: impl SqliteExecutor<'_>, id: &str, reason: Wipe) -> sqlx::
     .bind(id)
     .execute(db)
     .await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct FileRow {
+    pub idx: i64,
+    pub size: i64,
+    pub chunk_count: i64,
+    pub uploaded_chunks: i64,
+}
+
+pub async fn files(db: impl SqliteExecutor<'_>, share_id: &str) -> sqlx::Result<Vec<FileRow>> {
+    sqlx::query_as("SELECT idx, size, chunk_count, uploaded_chunks FROM share_files WHERE share_id = ? ORDER BY idx")
+        .bind(share_id)
+        .fetch_all(db)
+        .await
+}
+
+/// Revokes a share's file downloads immediately: drops download tokens and deletes the blobs.
+pub async fn destroy_files(state: &crate::app::AppState, id: &str) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM download_tokens WHERE share_id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+    state.blobs.remove_share(id).await;
     Ok(())
 }
 

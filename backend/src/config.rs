@@ -26,6 +26,12 @@ pub struct Config {
     pub cookie_secure: Option<bool>,
     /// Max size of a text/link/credential payload (ciphertext) in bytes.
     pub max_text_bytes: usize,
+    /// Max total size of the files in one file share.
+    pub max_upload_bytes: u64,
+    /// Max number of files in one file share.
+    pub max_files: usize,
+    /// How long a recipient can keep downloading files after opening a share.
+    pub download_ttl_mins: i64,
     /// How long burned/expired/revoked shares stay visible on the dashboard before purge.
     pub retention_days: i64,
     /// Wrong passphrase attempts before a share is destroyed.
@@ -75,6 +81,9 @@ impl Default for Config {
             session_ttl_hours: 24 * 7,
             cookie_secure: None,
             max_text_bytes: 1024 * 1024,
+            max_upload_bytes: 1024 * 1024 * 1024,
+            max_files: 100,
+            download_ttl_mins: 60,
             retention_days: 7,
             max_passphrase_attempts: 10,
             proxy: ProxyConfig::default(),

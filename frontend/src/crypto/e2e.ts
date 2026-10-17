@@ -7,11 +7,20 @@
  *  - "passphrase": wrapped with a KEK from argon2id(passphrase). The second half of the argon2
  *                  output is a verifier the server checks before spending a view, so a typo
  *                  doesn't burn a read-once share. The server stores only sha256(verifier).
+ *
+ * File bodies are split into 1 MiB chunks, each nonce(12) || AES-GCM(DEK, chunk) with
+ * aad = "sharesomething/v1/file" || u32 file index || u32 chunk index || u8 is-last,
+ * so chunks can't be reordered, swapped between files or truncated unnoticed.
  */
 import { argon2id } from 'hash-wasm'
 
 const AAD_CONTENT = new TextEncoder().encode('sharesomething/v1')
 const AAD_WRAP = new TextEncoder().encode('sharesomething/v1/wrap')
+const AAD_FILE = new TextEncoder().encode('sharesomething/v1/file')
+
+export const CHUNK_SIZE = 1024 * 1024
+/** Bytes added to every encrypted chunk (nonce + tag). */
+export const CHUNK_OVERHEAD = 12 + 16
 
 export interface KdfParams {
   alg: 'argon2id'
@@ -105,6 +114,8 @@ export async function derivePassphraseKeys(passphrase: string, kdf: KdfParams): 
 export interface EncryptedShare {
   ciphertext: string // base64
   meta: E2eMeta
+  /** Content key; never sent to the server. Needed to encrypt file chunks. */
+  dek: Uint8Array<ArrayBuffer>
   /** base64; present in passphrase mode, sent to the server at create time. */
   verifier?: string
   /** base64url DEK for the URL fragment; present in fragment mode. */
@@ -115,7 +126,7 @@ export async function encryptShare(payload: unknown, passphrase?: string, kdfCos
   const dek = random(32)
   const ct = await seal(dek, new TextEncoder().encode(JSON.stringify(payload)), AAD_CONTENT)
   if (!passphrase) {
-    return { ciphertext: toB64(ct), meta: { v: 1, alg: 'A256GCM', key: 'fragment' }, fragmentKey: toB64Url(dek) }
+    return { ciphertext: toB64(ct), meta: { v: 1, alg: 'A256GCM', key: 'fragment' }, dek, fragmentKey: toB64Url(dek) }
   }
   const kdf: KdfParams = { alg: 'argon2id', salt: toB64(random(16)), ...kdfCost }
   const { kek, verifier } = await derivePassphraseKeys(passphrase, kdf)
@@ -123,23 +134,48 @@ export async function encryptShare(payload: unknown, passphrase?: string, kdfCos
   return {
     ciphertext: toB64(ct),
     meta: { v: 1, alg: 'A256GCM', key: 'passphrase', kdf, wrapped_key: toB64(wrapped) },
+    dek,
     verifier: toB64(verifier),
   }
 }
 
-/** Decrypts with either the fragment key or the KEK derived from the passphrase. */
-export async function decryptShare<T>(ciphertext: string, meta: E2eMeta, secret: { fragmentKey?: string; kek?: Uint8Array<ArrayBuffer> }): Promise<T> {
+/** Recovers the content key from either the fragment key or the KEK derived from the passphrase. */
+export async function unwrapDek(meta: E2eMeta, secret: { fragmentKey?: string; kek?: Uint8Array<ArrayBuffer> }): Promise<Uint8Array<ArrayBuffer>> {
   if (meta.v !== 1 || meta.alg !== 'A256GCM') throw new Error('Unsupported encryption format')
-  let dek: Uint8Array<ArrayBuffer>
   if (meta.key === 'fragment') {
     if (!secret.fragmentKey) throw new Error('The link is missing its key (the part after #).')
-    dek = fromB64(secret.fragmentKey)
-  } else {
-    if (!secret.kek || !meta.wrapped_key) throw new Error('Passphrase required')
-    dek = await open(secret.kek, fromB64(meta.wrapped_key), AAD_WRAP)
+    return fromB64(secret.fragmentKey)
   }
+  if (!secret.kek || !meta.wrapped_key) throw new Error('Passphrase required')
+  return open(secret.kek, fromB64(meta.wrapped_key), AAD_WRAP)
+}
+
+export async function decryptPayload<T>(ciphertext: string, dek: Uint8Array<ArrayBuffer>): Promise<T> {
   const pt = await open(dek, fromB64(ciphertext), AAD_CONTENT)
   return JSON.parse(new TextDecoder().decode(pt)) as T
+}
+
+/** Decrypts with either the fragment key or the KEK derived from the passphrase. */
+export async function decryptShare<T>(ciphertext: string, meta: E2eMeta, secret: { fragmentKey?: string; kek?: Uint8Array<ArrayBuffer> }): Promise<T> {
+  return decryptPayload<T>(ciphertext, await unwrapDek(meta, secret))
+}
+
+function chunkAad(fileIdx: number, chunk: number, last: boolean): Uint8Array<ArrayBuffer> {
+  const aad = new Uint8Array(AAD_FILE.length + 9)
+  aad.set(AAD_FILE)
+  const view = new DataView(aad.buffer)
+  view.setUint32(AAD_FILE.length, fileIdx)
+  view.setUint32(AAD_FILE.length + 4, chunk)
+  aad[AAD_FILE.length + 8] = last ? 1 : 0
+  return aad
+}
+
+export function encryptChunk(dek: Uint8Array<ArrayBuffer>, fileIdx: number, chunk: number, last: boolean, data: Uint8Array<ArrayBuffer>) {
+  return seal(dek, data, chunkAad(fileIdx, chunk, last))
+}
+
+export function decryptChunk(dek: Uint8Array<ArrayBuffer>, fileIdx: number, chunk: number, last: boolean, data: Uint8Array<ArrayBuffer>) {
+  return open(dek, data, chunkAad(fileIdx, chunk, last))
 }
 
 /** Reads `k` from a URL fragment like `#k=abc`. */

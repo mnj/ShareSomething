@@ -18,11 +18,12 @@ use super::{
 use crate::{
     app::AppState,
     auth::owner::{Owner, owner_has_totp},
+    blobs,
     crypto::{self, CryptoError, ServerMeta},
     error::{AppError, AppResult},
     net::client_ip::ClientInfo,
     slug::GeneratorInfo,
-    util::{now, sha256},
+    util::{now, random_token, sha256},
 };
 
 const MAX_EXPIRY_SECS: i64 = 366 * 24 * 3600;
@@ -65,6 +66,29 @@ fn summary(state: &AppState, row: &ShareRow, policy: Vec<PolicyRule>) -> ShareSu
         status: row.status(now()),
         policy,
         entropy_bits: state.slugs.get(&row.slug_generator).map(|g| g.entropy_bits(&opts)).unwrap_or(0.0),
+        upload_pending: row.upload_pending,
+    }
+}
+
+/// Checks declared file sizes against the configured limits.
+fn validate_file_specs(state: &AppState, kind: ShareKind, files: Option<&[FileSpec]>) -> AppResult<Vec<u64>> {
+    match (kind, files) {
+        (ShareKind::Files, Some(files)) => {
+            if files.is_empty() || files.len() > state.cfg.max_files {
+                return Err(AppError::BadRequest(format!("a file share holds 1..{} files", state.cfg.max_files)));
+            }
+            let total: u64 = files.iter().map(|f| f.size).sum();
+            if total > state.cfg.max_upload_bytes {
+                return Err(AppError::BadRequest(format!(
+                    "files exceed the {} MiB limit",
+                    state.cfg.max_upload_bytes / (1024 * 1024)
+                )));
+            }
+            Ok(files.iter().map(|f| f.size).collect())
+        }
+        (ShareKind::Files, None) => Err(AppError::BadRequest("files is required for file shares".into())),
+        (_, Some(_)) => Err(AppError::BadRequest("files only applies to file shares".into())),
+        (_, None) => Ok(vec![]),
     }
 }
 
@@ -127,13 +151,14 @@ async fn list_shares(State(state): State<AppState>, _owner: Owner) -> AppResult<
 
 /// Create a share.
 #[utoipa::path(post, path = "/shares", tag = "shares", request_body = CreateShareRequest,
-    responses((status = 201, body = ShareSummary), (status = 400, body = crate::error::ErrorBody), (status = 409, body = crate::error::ErrorBody)))]
+    responses((status = 201, body = CreateShareResponse), (status = 400, body = crate::error::ErrorBody), (status = 409, body = crate::error::ErrorBody)))]
 async fn create_share(
     State(state): State<AppState>,
     _owner: Owner,
     Json(req): Json<CreateShareRequest>,
-) -> AppResult<(StatusCode, Json<ShareSummary>)> {
+) -> AppResult<(StatusCode, Json<CreateShareResponse>)> {
     let title = validate_title(req.title)?;
+    let file_sizes = validate_file_specs(&state, req.kind, req.files.as_deref())?;
     let rules = validate_policy(req.policy)?;
     validate_mfa_toggle(&state, req.require_owner_mfa).await?;
     if req.max_views.is_some_and(|m| !(1..=MAX_VIEWS).contains(&m)) {
@@ -153,7 +178,7 @@ async fn create_share(
     let max_bytes = state.cfg.max_text_bytes;
 
     // Encrypt / accept the content.
-    let (ciphertext, enc_meta, passphrase_required, verifier) = match req.enc_mode {
+    let (ciphertext, enc_meta, passphrase_required, verifier, dek) = match req.enc_mode {
         EncMode::Server => {
             if req.ciphertext.is_some() || req.enc_meta.is_some() || req.passphrase_verifier.is_some() {
                 return Err(AppError::BadRequest(
@@ -167,13 +192,18 @@ async fn create_share(
                 return Err(AppError::BadRequest("payload kind does not match share kind".into()));
             }
             payload.validate(max_bytes).map_err(AppError::BadRequest)?;
+            if let SharePayload::Files { files, .. } = &payload
+                && files.iter().map(|f| f.size).ne(file_sizes.iter().copied())
+            {
+                return Err(AppError::BadRequest("manifest sizes don't match files".into()));
+            }
             let passphrase = req.passphrase.filter(|p| !p.is_empty());
             if passphrase.as_ref().is_some_and(|p| p.len() > 1024) {
                 return Err(AppError::BadRequest("passphrase too long".into()));
             }
             let plaintext = serde_json::to_vec(&payload).map_err(anyhow::Error::from)?;
             let (master, sid, pw) = (state.master.clone(), id.clone(), passphrase.clone());
-            let (ct, meta) = tokio::task::spawn_blocking(move || crypto::seal(&master, &sid, &plaintext, pw.as_deref()))
+            let (ct, meta, dek) = tokio::task::spawn_blocking(move || crypto::seal(&master, &sid, &plaintext, pw.as_deref()))
                 .await
                 .map_err(anyhow::Error::from)?;
             (
@@ -181,6 +211,7 @@ async fn create_share(
                 serde_json::to_string(&meta).map_err(anyhow::Error::from)?,
                 passphrase.is_some(),
                 None,
+                Some(dek),
             )
         }
         EncMode::E2e => {
@@ -211,11 +242,17 @@ async fn create_share(
             if verifier.as_ref().is_some_and(|v| v.len() != 32) {
                 return Err(AppError::BadRequest("passphrase_verifier must be 32 bytes".into()));
             }
-            (ct, meta, verifier.is_some(), verifier.map(|v| sha256(&v)))
+            (ct, meta, verifier.is_some(), verifier.map(|v| sha256(&v)), None)
         }
     };
 
     let expires_at = req.expires_in_secs.map(|s| now() + s);
+    let is_files = req.kind == ShareKind::Files;
+    let upload_token = is_files.then(random_token);
+    let upload_dek = upload_token
+        .as_deref()
+        .zip(dek.as_ref())
+        .map(|(t, dek)| crypto::wrap_for_token(t, &id, dek));
     let slug_opts = serde_json::to_string(&req.slug.options).map_err(anyhow::Error::from)?;
     let mut tx = state.db.begin().await?;
     let mut slug = None;
@@ -226,8 +263,9 @@ async fn create_share(
             .map_err(|e| AppError::BadRequest(e.to_string()))?;
         let res = sqlx::query(
             "INSERT INTO shares (id, slug, slug_generator, slug_opts, kind, title, enc_mode, enc_meta, ciphertext,
-                passphrase_required, passphrase_verifier, require_owner_mfa, max_views, expires_at, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                passphrase_required, passphrase_verifier, require_owner_mfa, max_views, expires_at, created_at,
+                upload_pending, upload_dek, upload_token_hash)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&candidate)
@@ -244,6 +282,9 @@ async fn create_share(
         .bind(req.max_views)
         .bind(expires_at)
         .bind(now())
+        .bind(is_files)
+        .bind(&upload_dek)
+        .bind(upload_token.as_deref().map(|t| sha256(t.as_bytes())))
         .execute(&mut *tx)
         .await;
         match res {
@@ -263,11 +304,41 @@ async fn create_share(
         }));
     }
     store::replace_rules(&mut tx, &id, &rules).await?;
+    let mut files = Vec::with_capacity(file_sizes.len());
+    for (idx, size) in file_sizes.into_iter().enumerate() {
+        let chunk_count = blobs::chunk_count(size);
+        sqlx::query("INSERT INTO share_files (share_id, idx, size, chunk_count) VALUES (?, ?, ?, ?)")
+            .bind(&id)
+            .bind(idx as i64)
+            .bind(size as i64)
+            .bind(chunk_count as i64)
+            .execute(&mut *tx)
+            .await?;
+        files.push(FileUploadInfo {
+            idx: idx as u32,
+            size,
+            chunk_count,
+            chunk_size: blobs::CHUNK_SIZE as u64,
+        });
+    }
     tx.commit().await?;
 
     let row = store::by_id(&state.db, &id).await?.ok_or(AppError::NotFound)?;
     tracing::info!(share = %id, kind = %row.kind, enc = %row.enc_mode, "share created");
-    Ok((StatusCode::CREATED, Json(summary(&state, &row, rules))))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateShareResponse {
+            share: summary(&state, &row, rules),
+            upload_token,
+            files,
+        }),
+    ))
+}
+
+pub(super) async fn get_share_summary(state: &AppState, _owner: Owner, id: &str) -> AppResult<ShareSummary> {
+    let row = store::by_id(&state.db, id).await?.ok_or(AppError::NotFound)?;
+    let rules = store::rules(&state.db, id).await?;
+    Ok(summary(state, &row, rules))
 }
 
 /// Get one share's settings.
@@ -340,6 +411,9 @@ async fn update_share(
         tracing::info!(share = %id, "share revoked");
     }
     tx.commit().await?;
+    if req.revoke {
+        store::destroy_files(&state, &id).await?;
+    }
     get_share(State(state), _owner, Path(id)).await
 }
 
@@ -351,6 +425,7 @@ async fn delete_share(State(state): State<AppState>, _owner: Owner, Path(id): Pa
     if res.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+    state.blobs.remove_share(&id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -485,6 +560,9 @@ async fn wrong_passphrase(state: &AppState, row: &ShareRow, client: &ClientInfo,
         if let Err(e) = store::wipe(&state.db, &row.id, Wipe::Revoked).await {
             return e.into();
         }
+        if let Err(e) = store::destroy_files(state, &row.id).await {
+            return e.into();
+        }
         store::log_access(&state.db, &row.id, client, identity_label(owner), "destroyed_bad_passphrase").await;
         tracing::warn!(share = %row.id, "share destroyed after too many wrong passphrases");
         return AppError::NotFound;
@@ -522,7 +600,7 @@ async fn open_share(
     };
 
     // Check the passphrase (and decrypt server-side content) before spending a view.
-    let payload = match row.enc_mode() {
+    let (payload, dek) = match row.enc_mode() {
         EncMode::Server => {
             let pw = req.passphrase.filter(|p| !p.is_empty());
             if row.passphrase_required && pw.is_none() {
@@ -534,7 +612,10 @@ async fn open_share(
                 .await
                 .map_err(anyhow::Error::from)?;
             match result {
-                Ok(pt) => Some(serde_json::from_slice::<SharePayload>(&pt).map_err(anyhow::Error::from)?),
+                Ok((pt, dek)) => (
+                    Some(serde_json::from_slice::<SharePayload>(&pt).map_err(anyhow::Error::from)?),
+                    Some(dek),
+                ),
                 Err(CryptoError::Decrypt) if row.passphrase_required => {
                     return Err(wrong_passphrase(&state, &row, &client, owner.as_ref()).await);
                 }
@@ -551,7 +632,7 @@ async fn open_share(
                     return Err(wrong_passphrase(&state, &row, &client, owner.as_ref()).await);
                 }
             }
-            None
+            (None, None)
         }
     };
 
@@ -563,6 +644,21 @@ async fn open_share(
     if burned {
         store::wipe(&mut *tx, &row.id, Wipe::Burned).await?;
     }
+    // File shares: hand out a short-lived token for the chunks, which outlive a burned manifest.
+    let download = if row.kind() == ShareKind::Files {
+        let token = random_token();
+        let expires_at = now() + state.cfg.download_ttl_mins * 60;
+        sqlx::query("INSERT INTO download_tokens (token_hash, share_id, wrapped_dek, expires_at) VALUES (?, ?, ?, ?)")
+            .bind(sha256(token.as_bytes()))
+            .bind(&row.id)
+            .bind(dek.map(|d| crypto::wrap_for_token(&token, &row.id, &d)))
+            .bind(expires_at)
+            .execute(&mut *tx)
+            .await?;
+        Some((token, expires_at))
+    } else {
+        None
+    };
     tx.commit().await?;
     store::log_access(&state.db, &row.id, &client, who, if burned { "opened_burned" } else { "opened" }).await;
 
@@ -576,5 +672,7 @@ async fn open_share(
         enc_meta: if e2e { serde_json::from_str(&row.enc_meta).ok() } else { None },
         views_left: row.max_views.map(|m| (m - views).max(0)),
         burned,
+        download_expires_at: download.as_ref().map(|d| d.1),
+        download_token: download.map(|d| d.0),
     }))
 }

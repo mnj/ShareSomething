@@ -5,10 +5,12 @@ import { api, unwrap, type Schemas, type SharePayload, type ShareSummary } from 
 import { CopyButton } from '../components/CopyButton'
 import { CredentialEditor } from '../components/CredentialEditor'
 import { ErrorNote } from '../components/ErrorNote'
+import { FilePicker } from '../components/FilePicker'
 import { PolicyEditor } from '../components/PolicyEditor'
 import { SlugPicker, type SlugChoice } from '../components/SlugPicker'
 import { encryptShare } from '../crypto/e2e'
 import { useMe } from '../lib/auth'
+import { formatBytes, uploadFiles, type Progress } from '../lib/files'
 import { rowsToPolicy, type RuleRow } from '../lib/policy'
 
 type Kind = Schemas['ShareKind']
@@ -27,6 +29,7 @@ const KINDS: { kind: Kind; label: string }[] = [
   { kind: 'text', label: 'Text' },
   { kind: 'link', label: 'Link' },
   { kind: 'credential', label: 'Credential' },
+  { kind: 'files', label: 'Files' },
 ]
 
 interface Created {
@@ -55,6 +58,8 @@ export function NewShare() {
   const [access, setAccess] = useState<Access>('public')
   const [rules, setRules] = useState<RuleRow[]>([{ group: 'include', type: 'everyone', values: '' }])
   const [requireMfa, setRequireMfa] = useState(false)
+  const [files, setFiles] = useState<File[]>([])
+  const [progress, setProgress] = useState<Progress | null>(null)
   const [created, setCreated] = useState<Created | null>(null)
   const onSlug = useCallback((v: SlugChoice) => setSlug(v), [])
 
@@ -76,6 +81,8 @@ export function NewShare() {
         return { kind, url: url.trim(), note: n }
       case 'credential':
         return { kind, fields: fields.filter((f) => f.label.trim() || f.value), note: n }
+      case 'files':
+        return { kind, files: files.map((f) => ({ name: f.name, size: f.size, mime: f.type || null })), note: n }
     }
   }
 
@@ -96,19 +103,28 @@ export function NewShare() {
         expires_in_secs: expiry,
         require_owner_mfa: requireMfa,
         policy: policy(),
+        files: kind === 'files' ? files.map((f) => ({ size: f.size })) : null,
+      }
+      if (kind === 'files' && files.length === 0) throw new Error('Choose at least one file.')
+      const upload = async (res: Schemas['CreateShareResponse'], dek?: Uint8Array<ArrayBuffer>) => {
+        if (kind !== 'files' || !res.upload_token) return
+        await uploadFiles(res.share.id, res.upload_token, files, res.files, dek, setProgress)
       }
       if (encMode === 'server') {
-        const share = await unwrap(api.POST('/api/shares', { body: { ...base, payload: payload(), passphrase: passphrase || null } }))
-        return { share, fullUrl: share.url, passphrase: !!passphrase }
+        const res = await unwrap(api.POST('/api/shares', { body: { ...base, payload: payload(), passphrase: passphrase || null } }))
+        await upload(res)
+        return { share: res.share, fullUrl: res.share.url, passphrase: !!passphrase }
       }
       const enc = await encryptShare(payload(), passphrase || undefined)
-      const share = await unwrap(
+      const res = await unwrap(
         api.POST('/api/shares', {
           body: { ...base, ciphertext: enc.ciphertext, enc_meta: { ...enc.meta }, passphrase_verifier: enc.verifier ?? null },
         }),
       )
-      return { share, fullUrl: enc.fragmentKey ? `${share.url}#k=${enc.fragmentKey}` : share.url, passphrase: !!passphrase }
+      await upload(res, enc.dek)
+      return { share: res.share, fullUrl: enc.fragmentKey ? `${res.share.url}#k=${enc.fragmentKey}` : res.share.url, passphrase: !!passphrase }
     },
+    onSettled: () => setProgress(null),
     onSuccess: (c) => {
       setCreated(c)
       qc.invalidateQueries({ queryKey: ['shares'] })
@@ -141,6 +157,7 @@ export function NewShare() {
         {kind === 'text' && <textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} placeholder="Text, notes, a code snippet…" required />}
         {kind === 'link' && <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" required />}
         {kind === 'credential' && <CredentialEditor fields={fields} onChange={setFields} />}
+        {kind === 'files' && <FilePicker files={files} onChange={setFiles} />}
         {kind !== 'text' && <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" />}
         <label className="field">
           Title <span className="hint">optional; shown to people who pass the access policy, stored unencrypted</span>
@@ -220,10 +237,11 @@ export function NewShare() {
         <SlugPicker value={slug} onChange={onSlug} />
       </section>
 
+      {progress && <progress className="progress" value={progress.done} max={progress.total || 1} aria-label="Upload progress" />}
       <ErrorNote error={create.error} />
       <div className="row">
         <button className="btn btn-primary" disabled={create.isPending}>
-          {create.isPending ? 'Encrypting…' : 'Create share'}
+          {create.isPending ? (progress ? `Uploading ${formatBytes(progress.done)} / ${formatBytes(progress.total)}` : 'Encrypting…') : 'Create share'}
         </button>
         <Link to="/" className="btn btn-ghost">
           Cancel
