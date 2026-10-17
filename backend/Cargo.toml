@@ -1,6 +1,8 @@
 [package]
 name = "sharesomething"
 version = "0.1.0"
+description = "Self-hosted sharing of text, links, credentials and files with per-share security"
+repository = "https://github.com/mnj/ShareSomething"
 edition = "2024"
 license = "MIT"
 

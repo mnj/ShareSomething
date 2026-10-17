@@ -15,6 +15,9 @@ name specific people.
   embedded frontend (`rust-embed` of `frontend/dist`).
 - `frontend/`: React 19 + TypeScript + Vite, TanStack Query, `openapi-fetch` with generated types.
 - `deploy/`: compose files for cloudflared and Caddy. `Dockerfile` builds a distroless image.
+- `docs/`: the GitHub Pages site (static `index.html` + screenshots), deployed by
+  `.github/workflows/pages.yml`. `.github/workflows/ci.yml` runs fmt, clippy (`-D warnings`),
+  tests, typecheck, lint and the frontend build on every push and PR.
 
 ## Commands
 

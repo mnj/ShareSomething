@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ShareSomething: self-hosted, per-share secure sharing</title>
+    <meta name="description" content="Self-hosted sharing of text, links, credentials and files where every share gets its own security settings: end-to-end encryption, burn after reading, access policies, recipient sign-in and passkeys." />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <style>
+      :root {
+        --bg: #f6f7f5;
+        --surface: #ffffff;
+        --text: #1c2321;
+        --muted: #5d6865;
+        --border: #dde2df;
+        --accent: #2f6f5e;
+        --accent-text: #ffffff;
+        --accent-soft: #e3efea;
+        --code-bg: #eef1ef;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #121615;
+          --surface: #1b211f;
+          --text: #e6ebe9;
+          --muted: #9aa6a2;
+          --border: #2d3633;
+          --accent: #5fb39a;
+          --accent-text: #0d1513;
+          --accent-soft: #1f322c;
+          --code-bg: #0f1312;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        line-height: 1.55;
+      }
+      a { color: var(--accent); }
+      code, pre { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 0.9em; }
+      .wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+      header.top { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; }
+      .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--text); text-decoration: none; }
+      .brand img { width: 28px; height: 28px; }
+      nav a { margin-left: 18px; text-decoration: none; color: var(--muted); }
+      nav a:hover { color: var(--accent); }
+      @media (max-width: 640px) { nav a:not(:last-child) { display: none; } }
+      .hero { padding: 56px 0 32px; display: grid; gap: 40px; grid-template-columns: 1fr; }
+      @media (min-width: 900px) { .hero { grid-template-columns: 1fr 1.1fr; align-items: center; } }
+      .hero h1 { font-size: clamp(2rem, 5vw, 3rem); line-height: 1.1; margin: 0 0 16px; letter-spacing: -0.02em; }
+      .hero p.lead { font-size: 1.15rem; color: var(--muted); margin: 0 0 24px; }
+      .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+      .btn {
+        display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 10px;
+        border: 1px solid var(--border); background: var(--surface); color: var(--text);
+        text-decoration: none; font-weight: 600;
+      }
+      .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+      .shot { width: 100%; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12); display: block; }
+      section { padding: 40px 0; }
+      h2 { font-size: 1.6rem; margin: 0 0 8px; }
+      .sub { color: var(--muted); margin: 0 0 24px; }
+      .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+      .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+      .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+      .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+      table.uses { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+      table.uses th, table.uses td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+      table.uses th { background: var(--accent-soft); font-size: 0.9rem; }
+      table.uses tr:last-child td { border-bottom: 0; }
+      .scroll { overflow-x: auto; }
+      .gallery { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+      .gallery figure { margin: 0; }
+      .gallery figcaption { color: var(--muted); font-size: 0.9rem; margin-top: 8px; }
+      pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto; margin: 0 0 16px; }
+      ul.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+      ul.checks li { padding-left: 28px; position: relative; }
+      ul.checks li::before { content: '✓'; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+      footer { border-top: 1px solid var(--border); padding: 24px 0 40px; color: var(--muted); font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="top">
+        <a class="brand" href="./"><img src="favicon.svg" alt="" />ShareSomething</a>
+        <nav>
+          <a href="#features">Features</a>
+          <a href="#security">Security</a>
+          <a href="#start">Get started</a>
+          <a href="https://github.com/mnj/ShareSomething">GitHub</a>
+        </nav>
+      </header>
+
+      <div class="hero">
+        <div>
+          <h1>Share secrets, files and links, each with its own rules.</h1>
+          <p class="lead">
+            A self-hosted, single-binary app for sharing text, links, credentials and files. Pick end-to-end encryption, a
+            view limit, an expiry and exactly who may open it, per share. Run it behind a Cloudflare Tunnel or your reverse proxy.
+          </p>
+          <div class="cta">
+            <a class="btn primary" href="#start">Get started</a>
+            <a class="btn" href="https://github.com/mnj/ShareSomething">View on GitHub</a>
+          </div>
+        </div>
+        <img class="shot" src="screenshots/new-share.png" alt="Creating a share in ShareSomething" />
+      </div>
+
+      <section>
+        <h2>One tool, very different shares</h2>
+        <p class="sub">Most sharing tools use one setting for everything. Here every share chooses its own.</p>
+        <div class="scroll">
+          <table class="uses">
+            <tr><th>You want to…</th><th>Settings</th></tr>
+            <tr><td>Move an API key between your own PCs</td><td><b>Only me</b>, fresh passkey/TOTP required, read once</td></tr>
+            <tr><td>Give a guest the Wi-Fi password</td><td>Short link <code>/s/wifi-guest</code>, passphrase told in person, expires tonight</td></tr>
+            <tr><td>Share a doc link with the team</td><td>Anyone on the office IP range, unlimited views, 30 days</td></tr>
+            <tr><td>Send contract PDFs to a client</td><td>Anyone <code>@client.com</code> who confirms an emailed code or signs in with Google, 3 downloads</td></tr>
+            <tr><td>Hand out a short link</td><td><code>/s/launch</code> shows the destination for 5 seconds, then opens it</td></tr>
+          </table>
+        </div>
+      </section>
+
+      <section id="features">
+        <h2>Features</h2>
+        <p class="sub">Everything is configured per share, from the same simple form.</p>
+        <div class="grid">
+          <div class="card"><h3>End-to-end or server-side</h3><p>AES-256-GCM in the browser, with the key in the link's #fragment or derived from a passphrase (argon2id). Or server-side encryption with a per-share key.</p></div>
+          <div class="card"><h3>Burn after reading</h3><p>Read once, N views or an expiry. Content is wiped, not hidden. An explicit "Reveal" stops chat link previews from burning it.</p></div>
+          <div class="card"><h3>Access policies</h3><p>Allow / Require / Block rules on IP ranges, countries, email addresses, domains or "only me", modelled on Cloudflare Access. Save rule sets and reuse them.</p></div>
+          <div class="card"><h3>Recipient sign-in</h3><p>Emailed one-time codes, OIDC (Google, Microsoft, Keycloak, Authentik…) or GitHub. Only verified emails count.</p></div>
+          <div class="card"><h3>Files, streamed</h3><p>Multi-file shares, encrypted in 1 MiB chunks, streamed straight to disk on download, so multi-GB files never sit in memory.</p></div>
+          <div class="card"><h3>Short links that redirect</h3><p>Show the destination for a few seconds, then open it, with the same expiry, access rules and access log as every other share.</p></div>
+          <div class="card"><h3>Passkeys and TOTP</h3><p>Passwordless owner sign-in with passkeys, an authenticator app, and per-share "require fresh MFA".</p></div>
+          <div class="card"><h3>Readable links</h3><p>Pluggable link styles: <code>k7m2qx9d</code>, <code>monkey-space-sun-earth</code>, <code>bafoki-turesa</code> or your own, each with a guessability hint.</p></div>
+          <div class="card"><h3>Easy to host</h3><p>About a 22 MB distroless image with one <code>/data</code> volume. Ready-made Compose files for cloudflared and Caddy. Proxy-aware client IPs.</p></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>A look around</h2>
+        <p class="sub">The owner dashboard, and what recipients see.</p>
+        <div class="gallery">
+          <figure><img class="shot" src="screenshots/dashboard.png" alt="Dashboard" loading="lazy" /><figcaption>Dashboard: status, limits, access rules and per-share access log.</figcaption></figure>
+          <figure><img class="shot" src="screenshots/recipient-signin.png" alt="Recipient sign-in" loading="lazy" /><figcaption>Recipients prove their email with a provider or a one-time code.</figcaption></figure>
+          <figure><img class="shot" src="screenshots/credential.png" alt="Credential share" loading="lazy" /><figcaption>Credentials: secret fields masked until shown, one-click copy.</figcaption></figure>
+          <figure><img class="shot" src="screenshots/files-received.png" alt="File share" loading="lazy" /><figcaption>File shares stay downloadable for an hour after a read-once share is opened.</figcaption></figure>
+          <figure><img class="shot" src="screenshots/redirect.png" alt="Redirect link" loading="lazy" /><figcaption>Redirect links show where they go before going there.</figcaption></figure>
+          <figure><img class="shot" src="screenshots/settings.png" alt="Settings" loading="lazy" /><figcaption>Passkeys, authenticator app and saved access policies.</figcaption></figure>
+        </div>
+      </section>
+
+      <section id="security">
+        <h2>Security model</h2>
+        <p class="sub">Designed so the easy path is the safe one.</p>
+        <ul class="checks">
+          <li>End-to-end shares: the server never sees plaintext, keys or passphrases. A passphrase-derived verifier lets it reject typos <em>before</em> a read-once share is spent.</li>
+          <li>Views are spent atomically, so two people opening a read-once share at the same moment can't both get it.</li>
+          <li>Forwarding headers are only trusted from your proxy, so IP rules can't be bypassed by spoofing <code>X-Forwarded-For</code>.</li>
+          <li>Email codes are only sent to addresses that could pass the rules, and the response never reveals which those are. OIDC uses PKCE, a nonce and browser-bound state.</li>
+          <li>File chunks are bound to their position by the AEAD: no reordering or truncation goes unnoticed.</li>
+          <li>Strict CSP with no inline scripts, <code>no-referrer</code>, <code>no-store</code>, SameSite=Strict sessions, replay-proof TOTP, WebAuthn passkeys and per-IP rate limits.</li>
+        </ul>
+      </section>
+
+      <section id="start">
+        <h2>Get started</h2>
+        <p class="sub">Try it locally in a minute, then put it behind TLS.</p>
+<pre><code>docker build -t sharesomething https://github.com/mnj/ShareSomething.git
+docker run -d --name sharesomething -p 8080:8080 -v ss-data:/data \
+  -e SS_BASE_URL=http://localhost:8080 sharesomething
+docker exec -it sharesomething sharesomething admin init</code></pre>
+        <p>
+          Open <code>http://localhost:8080</code> and sign in. For production, use the
+          <a href="https://github.com/mnj/ShareSomething/blob/main/deploy/compose.cloudflared.yml">Cloudflare Tunnel</a> or
+          <a href="https://github.com/mnj/ShareSomething/blob/main/deploy/compose.caddy.yml">Caddy</a> Compose files. All options are in
+          <a href="https://github.com/mnj/ShareSomething/blob/main/config.example.toml">config.example.toml</a>.
+        </p>
+      </section>
+
+      <footer>
+        ShareSomething is open source under the <a href="https://github.com/mnj/ShareSomething/blob/main/LICENSE">MIT license</a>.
+        Built with Rust, axum, SQLite and React.
+      </footer>
+    </div>
+  </body>
+</html>

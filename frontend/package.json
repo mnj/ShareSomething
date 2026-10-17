@@ -34,5 +34,6 @@
     "openapi-typescript": {
       "typescript": "$typescript"
     }
-  }
+  },
+  "license": "MIT"
 }
