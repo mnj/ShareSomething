@@ -4,9 +4,22 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, ApiError, unwrap, type Schemas, type ShareInfo, type SharePayload } from '../api/client'
 import { CopyButton } from '../components/CopyButton'
 import { ErrorNote } from '../components/ErrorNote'
+import { MfaPrompt } from '../components/MfaPrompt'
 import { RecipientBar, RecipientSignIn } from '../components/RecipientSignIn'
 import { decryptPayload, derivePassphraseKeys, keyFromFragment, toB64, unwrapDek, type E2eMeta, type KdfParams } from '../crypto/e2e'
-import { downloadFile, formatBytes, saveBlob, type Progress } from '../lib/files'
+import {
+  canSaveToDisk,
+  canSaveToFolder,
+  downloadFile,
+  downloadToHandle,
+  formatBytes,
+  isAbort,
+  MEMORY_WARN_BYTES,
+  safeFileName,
+  saveBlob,
+  streamServerDownload,
+  type Progress,
+} from '../lib/files'
 import { AUTH_ERRORS, clearStashedKey, readStashedKey, useRecipient } from '../lib/recipient'
 import { formatRelative } from '../lib/format'
 
@@ -80,7 +93,6 @@ function Notice({ title, children }: { title: string; children: React.ReactNode 
 function Gate({ info, fragmentKey, onRevealed }: { info: ShareInfo; fragmentKey?: string; onRevealed: (r: Revealed) => void }) {
   const qc = useQueryClient()
   const [passphrase, setPassphrase] = useState('')
-  const [totp, setTotp] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const refresh = () => qc.invalidateQueries({ queryKey: ['share-info', info.slug] })
@@ -99,26 +111,12 @@ function Gate({ info, fragmentKey, onRevealed }: { info: ShareInfo; fragmentKey?
       )
     case 'need_owner_mfa':
       return (
-        <form
-          className="card stack narrow"
-          onSubmit={async (e) => {
-            e.preventDefault()
-            setError(null)
-            try {
-              await unwrap(api.POST('/api/auth/step-up', { body: { totp } }))
-              qc.invalidateQueries({ queryKey: ['me'] })
-              refresh()
-            } catch (err) {
-              setError(err)
-            }
-          }}
-        >
+        <section className="card stack narrow">
           <h1>Confirm it's you</h1>
-          <p>Enter the code from your authenticator app to open this share.</p>
-          <input inputMode="numeric" autoComplete="one-time-code" value={totp} onChange={(e) => setTotp(e.target.value)} placeholder="123456" autoFocus required />
-          <ErrorNote error={error} />
-          <button className="btn btn-primary">Confirm</button>
-        </form>
+          <MfaPrompt onDone={refresh}>
+            <p>Use a passkey or your authenticator app to open this share.</p>
+          </MfaPrompt>
+        </section>
       )
   }
 
@@ -264,25 +262,69 @@ function Payload({ p }: { p: SharePayload }) {
   }
 }
 
+type FileState = Progress | 'done' | 'started'
+
 function FileList({ r, files, note }: { r: Revealed; files: Schemas['FileEntry'][]; note?: string | null }) {
-  const [progress, setProgress] = useState<Record<number, Progress | 'done'>>({})
+  const [progress, setProgress] = useState<Record<number, FileState>>({})
   const [error, setError] = useState<unknown>(null)
-  const fetchOne = async (i: number) => {
+  const { token, dek } = r.download!
+  const serverMode = !dek
+  const set = (i: number, p: FileState | undefined) =>
+    setProgress((s) => {
+      const next = { ...s }
+      if (p) next[i] = p
+      else delete next[i]
+      return next
+    })
+
+  const fetchOne = async (i: number, dir?: FileSystemDirectoryHandle) => {
+    const f = files[i]
     setError(null)
     try {
-      const blob = await downloadFile(r.slug, r.download!.token, i, files[i], r.download!.dek, (p) => setProgress((s) => ({ ...s, [i]: p })))
-      saveBlob(blob, files[i].name)
-      setProgress((s) => ({ ...s, [i]: 'done' }))
+      if (serverMode) {
+        streamServerDownload(r.slug, i, token, f.name)
+        set(i, 'started')
+        return
+      }
+      const onProgress = (p: Progress) => set(i, p)
+      if (dir || canSaveToDisk()) {
+        // Pick the destination first (needs the click's user activation), then stream to it.
+        const handle = dir ? await dir.getFileHandle(safeFileName(f.name), { create: true }) : await window.showSaveFilePicker!({ suggestedName: f.name })
+        await downloadToHandle(handle, r.slug, token, i, f, dek, onProgress)
+      } else {
+        saveBlob(await downloadFile(r.slug, token, i, f, dek, onProgress), f.name)
+      }
+      set(i, 'done')
     } catch (e) {
-      setError(e)
-      setProgress((s) => {
-        const next = { ...s }
-        delete next[i]
-        return next
-      })
+      set(i, undefined)
+      if (!isAbort(e)) setError(e)
     }
   }
-  const busy = Object.values(progress).some((p) => p !== 'done')
+
+  const fetchAll = async () => {
+    if (serverMode) {
+      for (let i = 0; i < files.length; i++) {
+        if (progress[i]) continue
+        await fetchOne(i)
+        // Let each form-submitted download start before the next one.
+        await new Promise((res) => setTimeout(res, 1200))
+      }
+      return
+    }
+    let dir: FileSystemDirectoryHandle | undefined
+    if (canSaveToFolder()) {
+      try {
+        dir = await window.showDirectoryPicker!({ mode: 'readwrite' })
+      } catch (e) {
+        if (isAbort(e)) return
+        throw e
+      }
+    }
+    for (let i = 0; i < files.length; i++) if (progress[i] !== 'done') await fetchOne(i, dir)
+  }
+
+  const busy = Object.values(progress).some((p) => typeof p === 'object')
+  const big = !serverMode && !canSaveToDisk() && files.some((f) => f.size > MEMORY_WARN_BYTES)
   return (
     <div className="stack">
       <ul className="file-list">
@@ -294,6 +336,8 @@ function FileList({ r, files, note }: { r: Revealed; files: Schemas['FileEntry']
               <span className="hint">{formatBytes(f.size)}</span>
               {p === 'done' ? (
                 <span className="badge badge-ok">saved</span>
+              ) : p === 'started' ? (
+                <span className="badge badge-ok">downloading</span>
               ) : p ? (
                 <progress className="progress small" value={p.done} max={p.total || 1} aria-label={`Downloading ${f.name}`} />
               ) : (
@@ -306,20 +350,20 @@ function FileList({ r, files, note }: { r: Revealed; files: Schemas['FileEntry']
         })}
       </ul>
       {files.length > 1 && (
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={busy}
-          onClick={async () => {
-            for (let i = 0; i < files.length; i++) if (progress[i] !== 'done') await fetchOne(i)
-          }}
-        >
+        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => fetchAll().catch(setError)}>
           Download all
         </button>
       )}
       <ErrorNote error={error} />
+      {big && <p className="note note-warn">Large files are assembled in this browser's memory. If a download fails, try a Chromium-based browser, which can save straight to disk.</p>}
       {note && <p className="pre-wrap">{note}</p>}
-      <p className="hint">{r.download?.dek ? 'Files are decrypted in your browser as they download.' : 'Files are decrypted by the server as they download.'}</p>
+      <p className="hint">
+        {serverMode
+          ? "Files are decrypted by the server and saved by your browser's download manager."
+          : canSaveToDisk()
+            ? 'Files are decrypted in your browser and written straight to disk.'
+            : 'Files are decrypted in your browser as they download.'}
+      </p>
     </div>
   )
 }

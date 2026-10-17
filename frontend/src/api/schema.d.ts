@@ -55,6 +55,142 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/passkey/login/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish a passkey sign-in; the new session counts as freshly MFA-verified. */
+        post: operations["passkey_login_finish"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/passkey/login/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Begin a passkey sign-in (replaces password + TOTP). */
+        post: operations["passkey_login_start"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/passkey/register/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish registering a passkey. */
+        post: operations["passkey_register_finish"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/passkey/register/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Begin registering a new passkey. Needs a fresh MFA when TOTP or another passkey exists. */
+        post: operations["passkey_register_start"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/passkey/step-up/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish a passkey MFA step-up. */
+        post: operations["passkey_step_up_finish"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/passkey/step-up/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Begin a passkey MFA step-up for the current session. */
+        post: operations["passkey_step_up_start"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/passkeys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List registered passkeys. */
+        get: operations["passkey_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/passkeys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a passkey. Needs a fresh MFA. */
+        delete: operations["passkey_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/step-up": {
         parameters: {
             query?: never;
@@ -67,6 +203,41 @@ export interface paths {
         /** Re-confirm TOTP to open shares that require fresh owner MFA. */
         post: operations["step_up"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/policy-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Saved access policies. */
+        get: operations["template_list"];
+        put?: never;
+        /** Save a policy under a name; saving an existing name replaces it. */
+        post: operations["template_save"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/policy-templates/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a saved policy (shares that used it keep their own copy of the rules). */
+        delete: operations["template_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -225,6 +396,26 @@ export interface paths {
         get: operations["download_chunk"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/s/{slug}/files/{idx}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Server-mode only: decrypt and stream a whole file straight into the browser's download
+         *     manager (submitted as a form, so nothing is buffered in page memory).
+         */
+        post: operations["download_stream"];
         delete?: never;
         options?: never;
         head?: never;
@@ -393,6 +584,20 @@ export interface components {
             id: string;
             label: string;
         };
+        CeremonyFinish: {
+            ceremony_id: string;
+            /** @description The credential returned by the browser, binary fields base64url-encoded. */
+            credential: {
+                [key: string]: unknown;
+            };
+        };
+        CeremonyStart: {
+            ceremony_id: string;
+            /** @description WebAuthn options (base64url binary fields) for `navigator.credentials.create/get`. */
+            options: {
+                [key: string]: unknown;
+            };
+        };
         Choice: {
             label: string;
             value: string;
@@ -501,9 +706,14 @@ export interface components {
             initialised: boolean;
             /**
              * Format: int64
-             * @description Unix time until which the last TOTP step-up satisfies "require owner MFA" shares.
+             * @description Unix time until which the last MFA (TOTP or passkey) satisfies "require owner MFA" shares.
              */
             mfa_valid_until?: number | null;
+            /**
+             * Format: int64
+             * @description Number of registered passkeys (passkey sign-in is offered when > 0).
+             */
+            passkeys: number;
             totp_enabled: boolean;
         };
         OpenRequest: {
@@ -555,8 +765,23 @@ export interface components {
             /** @enum {string} */
             type: "text";
         };
+        PasskeyInfo: {
+            /** Format: int64 */
+            created_at: number;
+            id: string;
+            /** Format: int64 */
+            last_used_at?: number | null;
+            name: string;
+        };
         PolicyRule: components["schemas"]["Rule"] & {
             group: components["schemas"]["RuleGroup"];
+        };
+        PolicyTemplate: {
+            /** Format: int64 */
+            created_at: number;
+            id: string;
+            name: string;
+            policy: components["schemas"]["PolicyRule"][];
         };
         PreviewRequest: {
             options?: {
@@ -571,6 +796,10 @@ export interface components {
         };
         RecipientMe: {
             identities: components["schemas"]["IdentityInfo"][];
+        };
+        RegisterStart: {
+            /** @description Label shown in the passkey list, e.g. "Laptop". */
+            name: string;
         };
         Rule: {
             /** @enum {string} */
@@ -599,6 +828,10 @@ export interface components {
         };
         /** @enum {string} */
         RuleGroup: "include" | "require" | "exclude";
+        SaveTemplate: {
+            name: string;
+            policy: components["schemas"]["PolicyRule"][];
+        };
         /** @description What a visitor learns before opening a share. Details are hidden unless access is allowed. */
         ShareInfo: {
             /** @description Acceptable sign-in methods when `status = need_auth` (empty = any). */
@@ -683,6 +916,12 @@ export interface components {
         };
         StepUpRequest: {
             totp: string;
+        };
+        StreamForm: {
+            /** @description File name for the browser's save dialog. */
+            name: string;
+            /** @description Download token from the open response. */
+            token: string;
         };
         UpdateShareRequest: {
             /**
@@ -780,6 +1019,222 @@ export interface operations {
             };
         };
     };
+    passkey_login_finish: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CeremonyFinish"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    passkey_login_start: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CeremonyStart"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    passkey_register_finish: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CeremonyFinish"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeyInfo"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    passkey_register_start: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterStart"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CeremonyStart"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    passkey_step_up_finish: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CeremonyFinish"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    passkey_step_up_start: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CeremonyStart"];
+                };
+            };
+        };
+    };
+    passkey_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeyInfo"][];
+                };
+            };
+        };
+    };
+    passkey_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     step_up: {
         parameters: {
             query?: never;
@@ -802,6 +1257,83 @@ export interface operations {
                 };
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    template_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyTemplate"][];
+                };
+            };
+        };
+    };
+    template_save: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveTemplate"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyTemplate"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    template_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1020,6 +1552,40 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    download_stream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                idx: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["StreamForm"];
+            };
+        };
         responses: {
             200: {
                 headers: {

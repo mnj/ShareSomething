@@ -57,7 +57,37 @@ async function uploadWithRetry(url: string, token: string, body: Uint8Array<Arra
   }
 }
 
-/** Downloads (and for E2E decrypts) one file into a Blob. Holds the whole file in memory. */
+declare global {
+  interface Window {
+    showSaveFilePicker?: (opts?: { suggestedName?: string }) => Promise<FileSystemFileHandle>
+    showDirectoryPicker?: (opts?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>
+  }
+}
+
+/** Fetches (and for E2E decrypts) a file chunk by chunk, handing each plaintext chunk to `sink`. */
+async function pipeFile(
+  slug: string,
+  token: string,
+  idx: number,
+  file: Schemas['FileEntry'],
+  dek: Uint8Array<ArrayBuffer> | undefined,
+  sink: (chunk: Uint8Array<ArrayBuffer>) => Promise<void> | void,
+  onProgress: (p: Progress) => void,
+): Promise<void> {
+  const chunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE))
+  let done = 0
+  for (let n = 0; n < chunks; n++) {
+    const res = await check(await fetch(`/api/s/${encodeURIComponent(slug)}/files/${idx}/chunks/${n}`, { headers: { 'x-download-token': token } }))
+    const data = new Uint8Array(await res.arrayBuffer())
+    const plain = dek ? await decryptChunk(dek, idx, n, n === chunks - 1, data) : data
+    await sink(plain)
+    done += plain.length
+    onProgress({ done, total: file.size })
+  }
+  if (done !== file.size) throw new Error(`${file.name}: size mismatch, the download is incomplete`)
+}
+
+/** Downloads one file into a Blob. Holds the whole file in memory (fallback path). */
 export async function downloadFile(
   slug: string,
   token: string,
@@ -66,20 +96,66 @@ export async function downloadFile(
   dek: Uint8Array<ArrayBuffer> | undefined,
   onProgress: (p: Progress) => void,
 ): Promise<Blob> {
-  const chunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE))
   const parts: Uint8Array<ArrayBuffer>[] = []
-  let done = 0
-  for (let n = 0; n < chunks; n++) {
-    const res = await check(await fetch(`/api/s/${encodeURIComponent(slug)}/files/${idx}/chunks/${n}`, { headers: { 'x-download-token': token } }))
-    const data = new Uint8Array(await res.arrayBuffer())
-    const plain = dek ? await decryptChunk(dek, idx, n, n === chunks - 1, data) : data
-    parts.push(plain)
-    done += plain.length
-    onProgress({ done, total: file.size })
-  }
-  if (done !== file.size) throw new Error(`${file.name}: size mismatch, the download is incomplete`)
+  await pipeFile(slug, token, idx, file, dek, (c) => void parts.push(c), onProgress)
   return new Blob(parts, { type: file.mime || 'application/octet-stream' })
 }
+
+/** Streams one file straight to disk via the File System Access API (constant memory). */
+export async function downloadToHandle(
+  handle: FileSystemFileHandle,
+  slug: string,
+  token: string,
+  idx: number,
+  file: Schemas['FileEntry'],
+  dek: Uint8Array<ArrayBuffer> | undefined,
+  onProgress: (p: Progress) => void,
+): Promise<void> {
+  const out = await handle.createWritable()
+  try {
+    await pipeFile(slug, token, idx, file, dek, (c) => out.write(c), onProgress)
+    await out.close()
+  } catch (e) {
+    await out.abort().catch(() => {})
+    throw e
+  }
+}
+
+export const canSaveToDisk = () => typeof window.showSaveFilePicker === 'function'
+export const canSaveToFolder = () => typeof window.showDirectoryPicker === 'function'
+
+/** Files bigger than this are risky to assemble in memory. */
+export const MEMORY_WARN_BYTES = 512 * 1024 * 1024
+
+/** A name that is safe as a single path component in a chosen folder. */
+export function safeFileName(name: string): string {
+  // Control characters are exactly what we want to strip here.
+  // eslint-disable-next-line no-control-regex
+  return name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/^\.+/, '_') || 'file'
+}
+
+/**
+ * Server-mode files: submit a form so the server streams the decrypted file into the browser's
+ * own download manager (no page memory, works in every browser).
+ */
+export function streamServerDownload(slug: string, idx: number, token: string, name: string) {
+  const form = document.createElement('form')
+  form.method = 'POST'
+  form.action = `/api/s/${encodeURIComponent(slug)}/files/${idx}/download`
+  form.hidden = true
+  for (const [k, v] of Object.entries({ token, name })) {
+    const input = document.createElement('input')
+    input.type = 'hidden'
+    input.name = k
+    input.value = v
+    form.appendChild(input)
+  }
+  document.body.appendChild(form)
+  form.submit()
+  form.remove()
+}
+
+export const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError'
 
 export function saveBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob)

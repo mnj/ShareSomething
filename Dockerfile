@@ -9,7 +9,8 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM docker.io/library/rust:1-alpine AS build
-RUN apk add --no-cache musl-dev
+# perl, make and linux-headers build the vendored OpenSSL that webauthn-rs needs.
+RUN apk add --no-cache musl-dev perl make linux-headers
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rustfmt.toml ./
 COPY backend ./backend

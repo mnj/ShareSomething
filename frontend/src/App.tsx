@@ -5,6 +5,7 @@ import { useMe } from './lib/auth'
 import { Dashboard } from './pages/Dashboard'
 import { Login } from './pages/Login'
 import { NewShare } from './pages/NewShare'
+import { Settings } from './pages/Settings'
 import { ShareView } from './pages/ShareView'
 
 function Layout() {
@@ -17,6 +18,13 @@ function Layout() {
           ShareSomething
         </Link>
         {me.data?.authenticated && (
+          <nav className="row">
+            <Link to="/" className="btn btn-small btn-ghost">
+              Shares
+            </Link>
+            <Link to="/settings" className="btn btn-small btn-ghost">
+              Settings
+            </Link>
           <button
             type="button"
             className="btn btn-small btn-ghost"
@@ -27,6 +35,7 @@ function Layout() {
           >
             Sign out
           </button>
+          </nav>
         )}
       </header>
       <main className="container">
@@ -53,6 +62,7 @@ export default function App() {
         <Route element={<RequireOwner />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/new" element={<NewShare />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<p className="hint">Page not found.</p>} />
       </Route>

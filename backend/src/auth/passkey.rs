@@ -153,7 +153,7 @@ async fn finish_auth(state: &AppState, ceremony: &PasskeyAuthentication, credent
 pub struct CeremonyStart {
     pub ceremony_id: String,
     /// WebAuthn options (base64url binary fields) for `navigator.credentials.create/get`.
-    #[schema(value_type = Object)]
+    #[schema(value_type = std::collections::HashMap<String, Value>)]
     pub options: Value,
 }
 
@@ -161,7 +161,7 @@ pub struct CeremonyStart {
 pub struct CeremonyFinish {
     pub ceremony_id: String,
     /// The credential returned by the browser, binary fields base64url-encoded.
-    #[schema(value_type = Object)]
+    #[schema(value_type = std::collections::HashMap<String, Value>)]
     pub credential: Value,
 }
 

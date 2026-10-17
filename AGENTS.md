@@ -45,12 +45,14 @@ built from it and the API rejects non-GET requests whose `Origin` doesn't match 
 | `config.rs` | figment config: defaults < TOML file < `SS_*` env (`__` for nesting) |
 | `api.rs` | router assembly, OpenAPI doc, security headers, CSRF origin check |
 | `auth/owner.rs` | owner login, sessions (cookie `ss_owner`), TOTP step-up; `Owner` extractor |
+| `auth/passkey.rs` | owner WebAuthn passkeys (webauthn-rs): register, passwordless login, MFA step-up |
 | `auth/recipient.rs` | recipient session (cookie `ss_recipient`) with verified identities; email codes; `Recipient` extractor |
 | `auth/oidc.rs` | OIDC (discovery, PKCE, nonce, browser-bound state) and GitHub OAuth sign-in |
 | `mailer.rs` | SMTP / log / disabled mailer for one-time codes |
 | `shares/policy.rs` | **pure** access evaluator `evaluate(ShareState, AccessContext) -> Decision` |
 | `shares/handlers.rs` | owner CRUD + recipient `GET /api/s/{slug}` and `POST /api/s/{slug}/open` |
 | `shares/files.rs` | chunk upload (`x-upload-token`), finalize, chunk download (`x-download-token`) |
+| `shares/templates.rs` | named, reusable access policies |
 | `shares/store.rs` | SQL for shares, rules, atomic `consume_view`, `wipe`, access log |
 | `blobs.rs` | on-disk chunk storage `data/blobs/<share>/<idx>.bin`, chunk math |
 | `slug/` | pluggable link generators (`SlugGenerator` trait + `SlugRegistry`) |
@@ -93,6 +95,16 @@ Migrations live in `backend/migrations/`. Add a new numbered file; never edit an
     sets `trust_unverified_email`.
 13. Identity rules may only name sign-in methods the server offers (`validate_policy`), so a share
     can't be created that nobody is able to open.
+14. **Passkeys:** a passkey sign-in or step-up counts as fresh MFA. Adding or removing a passkey
+    needs fresh MFA whenever a second factor exists. Ceremony state is single-use and expires
+    after 5 minutes. WebAuthn needs `base_url` to be a domain name (https, or http://localhost);
+    otherwise passkeys are disabled.
+15. **CSRF check:** `Origin` must equal `base_url`'s origin. The one exception is `Origin: null`
+    together with `Sec-Fetch-Site: same-origin`, which is what browsers send for our own form posts
+    under `Referrer-Policy: no-referrer` (streamed file downloads). Don't loosen it further.
+16. Large downloads must not be buffered in memory. Server-mode files stream through a form POST
+    (`/files/{idx}/download`). E2E files stream through the File System Access API when the browser
+    has it, and only fall back to a Blob otherwise.
 
 ## Common tasks
 
@@ -133,8 +145,14 @@ by older clients must still open.
 - Every OpenAPI `operationId` must be unique (there's a test for it). Set `operation_id = "..."`
   when two modules have handlers with the same function name.
 
+## Build notes
+
+- `webauthn-rs` depends on OpenSSL; `openssl` is built with the `vendored` feature so the musl
+  binary stays static (the Docker build stage needs `perl make linux-headers`).
+- Tests use `webauthn-authenticator-rs` (soft passkey) for real WebAuthn ceremonies.
+
 ## Roadmap
 
-1. ~~Skeleton~~ 2. ~~Text/link/credential shares~~ 3. ~~Files~~ 4. ~~Recipient sign-in~~ (done)
-5. Polish: passkeys (`webauthn-rs`), policy templates, finer rate limiting (`tower_governor`),
-   streaming downloads for very large files (File System Access API / service worker)
+All five planned phases are done. Ideas for later: a service-worker streaming path for E2E
+downloads in browsers without the File System Access API, TOTP enrollment from the UI, and share
+editing (title/expiry/policy) from the dashboard.

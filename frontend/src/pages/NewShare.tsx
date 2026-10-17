@@ -8,10 +8,11 @@ import { ErrorNote } from '../components/ErrorNote'
 import { FilePicker } from '../components/FilePicker'
 import { PolicyEditor } from '../components/PolicyEditor'
 import { SlugPicker, type SlugChoice } from '../components/SlugPicker'
+import { TemplatePicker } from '../components/TemplatePicker'
 import { encryptShare } from '../crypto/e2e'
 import { useMe } from '../lib/auth'
 import { formatBytes, uploadFiles, type Progress } from '../lib/files'
-import { rowsToPolicy, type RuleRow } from '../lib/policy'
+import { policyToRows, rowsToPolicy, type RuleRow } from '../lib/policy'
 
 type Kind = Schemas['ShareKind']
 type Access = 'public' | 'owner' | 'custom'
@@ -68,7 +69,7 @@ export function NewShare() {
     // Credentials default to the locked-down "only me" setup for moving secrets between machines.
     if (k === 'credential' && access === 'public') {
       setAccess('owner')
-      if (me.data?.totp_enabled) setRequireMfa(true)
+      if (me.data?.totp_enabled || me.data?.passkeys) setRequireMfa(true)
     }
   }
 
@@ -133,7 +134,7 @@ export function NewShare() {
 
   if (created) return <CreatedView created={created} onAnother={() => location.reload()} />
 
-  const totp = me.data?.totp_enabled
+  const hasMfa = !!(me.data?.totp_enabled || me.data?.passkeys)
   const e2eFragment = encMode === 'e2e' && !passphrase
 
   return (
@@ -225,10 +226,17 @@ export function NewShare() {
             </button>
           ))}
         </div>
+        <TemplatePicker
+          onApply={(p) => {
+            setAccess('custom')
+            setRules(policyToRows(p))
+          }}
+          current={access === 'custom' ? () => rowsToPolicy(rules) : null}
+        />
         {access === 'custom' && <PolicyEditor rows={rules} onChange={setRules} />}
         <label className="check">
-          <input type="checkbox" checked={requireMfa} disabled={!totp} onChange={(e) => setRequireMfa(e.target.checked)} />
-          Also require my authenticator code (owner sign-in + fresh TOTP){!totp && ' (enable TOTP first)'}
+          <input type="checkbox" checked={requireMfa} disabled={!hasMfa} onChange={(e) => setRequireMfa(e.target.checked)} />
+          Also require my authenticator code or passkey (owner sign-in + fresh MFA){!hasMfa && ' (set up TOTP or a passkey first)'}
         </label>
       </section>
 

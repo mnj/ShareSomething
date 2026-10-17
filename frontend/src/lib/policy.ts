@@ -37,3 +37,22 @@ export function rowsToPolicy(rows: RuleRow[]): PolicyRule[] {
     }
   })
 }
+
+/** Inverse of rowsToPolicy, for loading saved templates into the editor. */
+export function policyToRows(policy: PolicyRule[]): RuleRow[] {
+  return policy.map((r): RuleRow => {
+    switch (r.type) {
+      case 'everyone':
+      case 'owner':
+        return { group: r.group, type: r.type, values: '' }
+      case 'ip':
+        return { group: r.group, type: r.type, values: r.cidrs.join(', ') }
+      case 'country':
+        return { group: r.group, type: r.type, values: r.countries.join(', ') }
+      case 'email':
+        return { group: r.group, type: r.type, values: r.emails.join(', '), method: r.methods?.[0] ?? '' }
+      case 'email_domain':
+        return { group: r.group, type: r.type, values: r.domains.join(', '), method: r.methods?.[0] ?? '' }
+    }
+  })
+}

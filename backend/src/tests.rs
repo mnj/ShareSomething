@@ -422,6 +422,26 @@ async fn owner_only_with_mfa_step_up() {
 async fn cross_origin_post_rejected() {
     let t = TestApp::new().await;
     let c = t.login().await;
+    // `Origin: null` (no-referrer form posts) only passes with a same-origin Sec-Fetch-Site.
+    let post =
+        |h: &'static [(&'static str, &'static str)]| t.req("POST", "/api/shares", Some(public_text("x")), Some(&c), "198.51.100.1", h);
+    assert_eq!(
+        post(&[("origin", "null"), ("sec-fetch-site", "same-origin")]).await.status,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        post(&[("origin", "null"), ("sec-fetch-site", "cross-site")]).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(&[("origin", "null"), ("sec-fetch-site", "same-site")]).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(&[("origin", "null")]).await.status,
+        StatusCode::FORBIDDEN,
+        "null without fetch metadata"
+    );
     let r = t
         .req(
             "POST",

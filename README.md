@@ -19,11 +19,15 @@ security settings** instead of one global setting.
   chat apps can't burn a share, because opening needs an explicit *Reveal*.
 - **File shares**: drag & drop several files. Each is encrypted in 1 MiB chunks, in the browser (E2E)
   or on the server. A read-once share burns on open, and the recipient keeps a one-hour download window.
+  Downloads stream to disk: server-mode files through the browser's download manager, E2E files
+  through the File System Access API (Chromium), with an in-memory fallback elsewhere.
 - **Access policies**, modelled on Cloudflare Access: *Allow if* (any) / *Require* (all) / *Block if*
   rules on everyone, owner, IP/CIDR, country, email and email domain.
 - **Recipient sign-in** for email and domain rules: an emailed one-time code, or OIDC (Google, Microsoft,
   Keycloak, Authentik, ...) and GitHub. A rule can require a specific method.
-- **Owner MFA per share**: require a fresh authenticator code to open a specific share.
+- **Owner MFA per share**: require a fresh authenticator code or passkey to open a specific share.
+- **Passkeys** for the owner: passwordless sign-in and one-tap MFA confirmation (Settings).
+- **Saved access policies**: store a rule set as "Office network" or "Clients via Google" and reuse it.
 - **Pluggable link styles**: `k7m2qx9d`, `monkey-space-sun-earth`, `bafoki-turesa`, or your own
   `wifi-guest`, with an entropy hint for each.
 - **Access log** per share (time, IP, country, outcome).
@@ -115,5 +119,5 @@ See [AGENTS.md](AGENTS.md) for the architecture, invariants and how to extend th
 
 ## Roadmap
 
-- Passkeys for the owner, reusable policy templates
-- Streaming downloads for multi-GB files (today a file is assembled in browser memory)
+- Streaming E2E downloads in Firefox/Safari (service worker); today they assemble files in memory
+- TOTP enrollment and share editing from the UI

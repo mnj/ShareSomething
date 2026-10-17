@@ -5,6 +5,7 @@
 bind = "0.0.0.0:8080"
 # Public URL people use. Builds share links and is checked against the Origin header.
 # Cookies are marked Secure automatically when this is https.
+# Owner passkeys need a domain name here (https://..., or http://localhost for development).
 base_url = "https://share.example.com"
 data_dir = "./data"
 

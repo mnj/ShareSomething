@@ -93,6 +93,280 @@
         }
       }
     },
+    "/api/auth/passkey/login/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish a passkey sign-in; the new session counts as freshly MFA-verified.",
+        "operationId": "passkey_login_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeremonyFinish"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/passkey/login/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Begin a passkey sign-in (replaces password + TOTP).",
+        "operationId": "passkey_login_start",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeremonyStart"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/passkey/register/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish registering a passkey.",
+        "operationId": "passkey_register_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeremonyFinish"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/passkey/register/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Begin registering a new passkey. Needs a fresh MFA when TOTP or another passkey exists.",
+        "operationId": "passkey_register_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeremonyStart"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/passkey/step-up/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finish a passkey MFA step-up.",
+        "operationId": "passkey_step_up_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeremonyFinish"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/passkey/step-up/start": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Begin a passkey MFA step-up for the current session.",
+        "operationId": "passkey_step_up_start",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeremonyStart"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/passkeys": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List registered passkeys.",
+        "operationId": "passkey_list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PasskeyInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/passkeys/{id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Remove a passkey. Needs a fresh MFA.",
+        "operationId": "passkey_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/step-up": {
       "post": {
         "tags": [
@@ -122,6 +396,103 @@
             }
           },
           "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/policy-templates": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Saved access policies.",
+        "operationId": "template_list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PolicyTemplate"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Save a policy under a name; saving an existing name replaces it.",
+        "operationId": "template_save",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/policy-templates/{id}": {
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Delete a saved policy (shares that used it keep their own copy of the rules).",
+        "operationId": "template_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
             "description": "",
             "content": {
               "application/json": {
@@ -461,6 +832,72 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/s/{slug}/files/{idx}/download": {
+      "post": {
+        "tags": [
+          "recipient"
+        ],
+        "summary": "Server-mode only: decrypt and stream a whole file straight into the browser's download\nmanager (submitted as a form, so nothing is buffered in page memory).",
+        "operationId": "download_stream",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/StreamForm"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "",
@@ -1059,6 +1496,46 @@
           }
         }
       },
+      "CeremonyFinish": {
+        "type": "object",
+        "required": [
+          "ceremony_id",
+          "credential"
+        ],
+        "properties": {
+          "ceremony_id": {
+            "type": "string"
+          },
+          "credential": {
+            "type": "object",
+            "description": "The credential returned by the browser, binary fields base64url-encoded.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CeremonyStart": {
+        "type": "object",
+        "required": [
+          "ceremony_id",
+          "options"
+        ],
+        "properties": {
+          "ceremony_id": {
+            "type": "string"
+          },
+          "options": {
+            "type": "object",
+            "description": "WebAuthn options (base64url binary fields) for `navigator.credentials.create/get`.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "Choice": {
         "type": "object",
         "required": [
@@ -1423,7 +1900,8 @@
         "required": [
           "authenticated",
           "initialised",
-          "totp_enabled"
+          "totp_enabled",
+          "passkeys"
         ],
         "properties": {
           "authenticated": {
@@ -1438,7 +1916,12 @@
               "null"
             ],
             "format": "int64",
-            "description": "Unix time until which the last TOTP step-up satisfies \"require owner MFA\" shares."
+            "description": "Unix time until which the last MFA (TOTP or passkey) satisfies \"require owner MFA\" shares."
+          },
+          "passkeys": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of registered passkeys (passkey sign-in is offered when > 0)."
           },
           "totp_enabled": {
             "type": "boolean"
@@ -1641,6 +2124,33 @@
           }
         ]
       },
+      "PasskeyInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "PolicyRule": {
         "allOf": [
           {
@@ -1658,6 +2168,33 @@
             }
           }
         ]
+      },
+      "PolicyTemplate": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "policy",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "policy": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            }
+          }
+        }
       },
       "PreviewRequest": {
         "type": "object",
@@ -1702,6 +2239,18 @@
             "items": {
               "$ref": "#/components/schemas/IdentityInfo"
             }
+          }
+        }
+      },
+      "RegisterStart": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Label shown in the passkey list, e.g. \"Laptop\"."
           }
         }
       },
@@ -1846,6 +2395,24 @@
           "require",
           "exclude"
         ]
+      },
+      "SaveTemplate": {
+        "type": "object",
+        "required": [
+          "name",
+          "policy"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "policy": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            }
+          }
+        }
       },
       "ShareInfo": {
         "type": "object",
@@ -2171,6 +2738,23 @@
         "properties": {
           "totp": {
             "type": "string"
+          }
+        }
+      },
+      "StreamForm": {
+        "type": "object",
+        "required": [
+          "token",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "File name for the browser's save dialog."
+          },
+          "token": {
+            "type": "string",
+            "description": "Download token from the open response."
           }
         }
       },

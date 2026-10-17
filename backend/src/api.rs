@@ -119,12 +119,15 @@ async fn api_rate_limit(State(state): State<AppState>, req: Request, next: Next)
 async fn origin_check(State(state): State<AppState>, req: Request, next: Next) -> Result<Response, AppError> {
     if !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
         let h = req.headers();
+        let fetch_site = h.get("sec-fetch-site").and_then(|v| v.to_str().ok());
         let origin_ok = match h.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-            Some(o) => o == state.cfg.origin(),
-            None => h
-                .get("sec-fetch-site")
-                .and_then(|v| v.to_str().ok())
-                .is_none_or(|s| s == "same-origin" || s == "none"),
+            Some(o) if o == state.cfg.origin() => true,
+            // With `Referrer-Policy: no-referrer`, browsers send `Origin: null` on our own form
+            // posts (streamed file downloads). Sec-Fetch-Site can't be set by page script, so
+            // trust "null" only when the browser itself vouches for a same-origin request.
+            Some("null") => fetch_site == Some("same-origin"),
+            Some(_) => false,
+            None => fetch_site.is_none_or(|s| s == "same-origin" || s == "none"),
         };
         if !origin_ok {
             return Err(AppError::Forbidden("cross-origin request rejected".into()));

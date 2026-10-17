@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, unwrap } from '../api/client'
 import { ErrorNote } from '../components/ErrorNote'
 import { useMe } from '../lib/auth'
+import { getPasskey, passkeyError, webauthnSupported } from '../lib/webauthn'
 
 export function Login() {
   const me = useMe()
@@ -30,6 +31,21 @@ export function Login() {
   }
 
   const showTotp = needTotp || !!me.data?.totp_enabled
+  const passkeyLogin = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const start = await unwrap(api.POST('/api/auth/passkey/login/start'))
+      const credential = await getPasskey(start.options)
+      const res = await unwrap(api.POST('/api/auth/passkey/login/finish', { body: { ceremony_id: start.ceremony_id, credential } }))
+      qc.setQueryData(['me'], res)
+      navigate(target, { replace: true })
+    } catch (err) {
+      setError(passkeyError(err))
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <form
       className="card stack narrow"
@@ -50,6 +66,14 @@ export function Login() {
       }}
     >
       <h1>Sign in</h1>
+      {!!me.data?.passkeys && webauthnSupported() && (
+        <>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={passkeyLogin}>
+            Sign in with a passkey
+          </button>
+          <div className="divider">or use your password</div>
+        </>
+      )}
       <label className="field">
         Password
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus required />
@@ -61,7 +85,7 @@ export function Login() {
         </label>
       )}
       <ErrorNote error={error} />
-      <button className="btn btn-primary" disabled={busy}>
+      <button className={me.data?.passkeys ? 'btn' : 'btn btn-primary'} disabled={busy}>
         Sign in
       </button>
     </form>
