@@ -44,6 +44,8 @@ enum Cmd {
     },
     /// Print the OpenAPI document (used to generate frontend types).
     Openapi,
+    /// Exit 0 if the local server answers /healthz (for container HEALTHCHECK; no curl needed).
+    Healthcheck,
 }
 
 #[tokio::main]
@@ -63,7 +65,25 @@ async fn main() -> anyhow::Result<()> {
             admin::run(cmd, &db).await
         }
         Cmd::Serve => serve(Config::load(cli.config.as_deref())?).await,
+        Cmd::Healthcheck => healthcheck(Config::load(cli.config.as_deref())?.bind.port()).await,
     }
+}
+
+async fn healthcheck(port: u16) -> anyhow::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+    )
+    .await??;
+    stream.write_all(b"GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n").await?;
+    let mut buf = vec![0u8; 64];
+    let n = stream.read(&mut buf).await?;
+    anyhow::ensure!(
+        buf[..n].starts_with(b"HTTP/1.1 200") || buf[..n].starts_with(b"HTTP/1.0 200"),
+        "unhealthy"
+    );
+    Ok(())
 }
 
 async fn serve(cfg: Config) -> anyhow::Result<()> {

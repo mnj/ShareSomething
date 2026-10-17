@@ -1,0 +1,37 @@
+# ShareSomething configuration. Copy to config.toml and pass with --config / SS_CONFIG.
+# Every key can also be set via environment: SS_<KEY>, nested with "__"
+# (e.g. SS_BASE_URL, SS_PROXY__MODE, SS_PROXY__TRUSTED_PROXIES="172.30.0.0/24,127.0.0.1").
+
+bind = "0.0.0.0:8080"
+# Public URL people use. Builds share links and is checked against the Origin header.
+# Cookies are marked Secure automatically when this is https.
+base_url = "https://share.example.com"
+data_dir = "./data"
+
+# Base64 32-byte key that wraps server-side encryption keys. If unset, one is generated in
+# data_dir/master.key on first start. Back it up: losing it makes server-mode shares unreadable.
+# Generate: openssl rand -base64 32
+# master_key = ""
+
+session_ttl_hours = 168
+max_text_bytes = 1048576
+# Burned/expired/revoked shares stay on the dashboard this long before being purged.
+retention_days = 7
+# Wrong passphrase attempts before a share is destroyed.
+max_passphrase_attempts = 10
+
+[proxy]
+# none       - use the TCP peer address (app exposed directly)
+# cloudflare - trust CF-Connecting-IP / CF-IPCountry (cloudflared tunnel or Cloudflare proxy)
+# forwarded  - trust X-Forwarded-For / Forwarded (Caddy, nginx, Traefik)
+mode = "none"
+# Only these peers may supply the headers above. Keep this as narrow as possible:
+# the docker network of your tunnel/proxy, or 127.0.0.1 when it runs on the host.
+trusted_proxies = []
+
+[slugs]
+# Link styles: shortcode, words, pronounceable, custom. Empty = all.
+enabled = []
+default = "shortcode"
+# Optional wordlist (one lowercase a-z word per line, at least 256) for the "words" style.
+# words_file = "/data/words.txt"
