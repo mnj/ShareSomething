@@ -143,18 +143,64 @@ pub struct MeResponse {
     pub authenticated: bool,
     pub initialised: bool,
     pub totp_enabled: bool,
-    /// Unix time until which the last TOTP step-up satisfies "require owner MFA" shares.
+    /// Number of registered passkeys (passkey sign-in is offered when > 0).
+    pub passkeys: i64,
+    /// Unix time until which the last MFA (TOTP or passkey) satisfies "require owner MFA" shares.
     pub mfa_valid_until: Option<i64>,
 }
 
-async fn me_response(state: &AppState, owner: Option<&Owner>) -> AppResult<MeResponse> {
+pub(super) async fn passkey_count(state: &AppState) -> AppResult<i64> {
+    Ok(sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM owner_passkeys")
+        .fetch_one(&state.db)
+        .await?
+        .0)
+}
+
+pub(super) async fn me_response(state: &AppState, owner: Option<&Owner>) -> AppResult<MeResponse> {
     let row = load_owner(state).await.ok();
     Ok(MeResponse {
         authenticated: owner.is_some(),
         initialised: row.is_some(),
         totp_enabled: row.as_ref().is_some_and(|r| r.totp_secret.is_some()),
+        passkeys: passkey_count(state).await?,
         mfa_valid_until: owner.and_then(|o| o.mfa_at).map(|t| t + MFA_FRESH_SECS).filter(|t| *t > now()),
     })
+}
+
+/// Creates an owner session and adds its cookie.
+pub(super) async fn start_session(state: &AppState, jar: CookieJar, mfa_at: Option<i64>) -> AppResult<(CookieJar, Owner)> {
+    let token = random_token();
+    let ttl = state.cfg.session_ttl_hours * 3600;
+    let token_hash = sha256(token.as_bytes());
+    sqlx::query("INSERT INTO owner_sessions (token_hash, created_at, expires_at, mfa_at) VALUES (?, ?, ?, ?)")
+        .bind(&token_hash)
+        .bind(now())
+        .bind(now() + ttl)
+        .bind(mfa_at)
+        .execute(&state.db)
+        .await?;
+    Ok((jar.add(session_cookie(state, token, ttl)), Owner { mfa_at, token_hash }))
+}
+
+/// Records a successful MFA (TOTP or passkey) on the current session.
+pub(super) async fn mark_mfa(state: &AppState, owner: Owner) -> AppResult<Owner> {
+    let t = now();
+    sqlx::query("UPDATE owner_sessions SET mfa_at = ? WHERE token_hash = ?")
+        .bind(t)
+        .bind(&owner.token_hash)
+        .execute(&state.db)
+        .await?;
+    Ok(Owner { mfa_at: Some(t), ..owner })
+}
+
+impl Owner {
+    pub fn token_hash(&self) -> &[u8] {
+        &self.token_hash
+    }
+
+    pub fn mfa_fresh(&self) -> bool {
+        self.mfa_at.is_some_and(|t| now() - t <= MFA_FRESH_SECS)
+    }
 }
 
 /// Log in as the owner.
@@ -193,22 +239,10 @@ async fn login(
         }
     };
 
-    let token = random_token();
-    let ttl = state.cfg.session_ttl_hours * 3600;
-    sqlx::query("INSERT INTO owner_sessions (token_hash, created_at, expires_at, mfa_at) VALUES (?, ?, ?, ?)")
-        .bind(sha256(token.as_bytes()))
-        .bind(now())
-        .bind(now() + ttl)
-        .bind(mfa_at)
-        .execute(&state.db)
-        .await?;
+    let (jar, session) = start_session(&state, jar, mfa_at).await?;
     tracing::info!(ip = %client.ip, "owner logged in");
-    let session = Owner {
-        mfa_at,
-        token_hash: vec![],
-    };
     let me = me_response(&state, Some(&session)).await?;
-    Ok((jar.add(session_cookie(&state, token, ttl)), Json(me)))
+    Ok((jar, Json(me)))
 }
 
 /// Log out and invalidate the current session.
@@ -251,13 +285,7 @@ async fn step_up(
     if !check_totp(&state, &row, &req.totp).await? {
         return Err(AppError::AuthFailed("invalid_code", "invalid code"));
     }
-    let t = now();
-    sqlx::query("UPDATE owner_sessions SET mfa_at = ? WHERE token_hash = ?")
-        .bind(t)
-        .bind(&owner.token_hash)
-        .execute(&state.db)
-        .await?;
-    let fresh = Owner { mfa_at: Some(t), ..owner };
+    let fresh = mark_mfa(&state, owner).await?;
     Ok(Json(me_response(&state, Some(&fresh)).await?))
 }
 
@@ -269,6 +297,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(step_up))
 }
 
-pub async fn owner_has_totp(state: &AppState) -> AppResult<bool> {
-    Ok(load_owner(state).await?.totp_secret.is_some())
+/// Whether the owner has a second factor (TOTP or a passkey) for MFA step-ups.
+pub async fn owner_has_mfa(state: &AppState) -> AppResult<bool> {
+    Ok(load_owner(state).await?.totp_secret.is_some() || passkey_count(state).await? > 0)
 }

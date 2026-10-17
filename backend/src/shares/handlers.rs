@@ -18,7 +18,7 @@ use super::{
 use crate::{
     app::AppState,
     auth::{
-        owner::{Owner, owner_has_totp},
+        owner::{Owner, owner_has_mfa},
         recipient::{Recipient, available_methods},
     },
     blobs,
@@ -95,7 +95,7 @@ fn validate_file_specs(state: &AppState, kind: ShareKind, files: Option<&[FileSp
     }
 }
 
-fn validate_policy(state: &AppState, rules: Vec<PolicyRule>) -> AppResult<Vec<PolicyRule>> {
+pub(super) fn validate_policy(state: &AppState, rules: Vec<PolicyRule>) -> AppResult<Vec<PolicyRule>> {
     if rules.len() > 50 {
         return Err(AppError::BadRequest("too many policy rules".into()));
     }
@@ -139,9 +139,9 @@ fn validate_policy(state: &AppState, rules: Vec<PolicyRule>) -> AppResult<Vec<Po
 }
 
 async fn validate_mfa_toggle(state: &AppState, require_owner_mfa: bool) -> AppResult<()> {
-    if require_owner_mfa && !owner_has_totp(state).await? {
+    if require_owner_mfa && !owner_has_mfa(state).await? {
         return Err(AppError::BadRequest(
-            "enable TOTP for the owner account before requiring owner MFA".into(),
+            "set up TOTP or a passkey for the owner account before requiring owner MFA".into(),
         ));
     }
     Ok(())

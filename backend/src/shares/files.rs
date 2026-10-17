@@ -34,6 +34,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(upload_chunk))
         .routes(routes!(finalize_upload))
         .routes(routes!(download_chunk))
+        .routes(routes!(download_stream))
 }
 
 fn token_header<'a>(headers: &'a HeaderMap, name: &str) -> AppResult<&'a str> {
@@ -164,6 +165,58 @@ async fn finalize_upload(
     super::handlers::get_share_summary(&state, owner, &id).await.map(Json)
 }
 
+/// A valid download grant: the share, the file being fetched and (server mode) the DEK.
+struct Grant {
+    row: store::ShareRow,
+    file: store::FileRow,
+    dek: Option<crypto::Dek>,
+}
+
+async fn grant(state: &AppState, slug: &str, idx: u32, token: &str) -> AppResult<Grant> {
+    let row = store::by_slug(&state.db, slug).await?.ok_or(AppError::NotFound)?;
+    let found: Option<(Option<Vec<u8>>,)> =
+        sqlx::query_as("SELECT wrapped_dek FROM download_tokens WHERE token_hash = ? AND share_id = ? AND expires_at > ?")
+            .bind(sha256(token.as_bytes()))
+            .bind(&row.id)
+            .bind(now())
+            .fetch_optional(&state.db)
+            .await?;
+    let Some((wrapped_dek,)) = found else {
+        return Err(AppError::Access(
+            "download_expired",
+            "this download link has expired; open the share again".into(),
+        ));
+    };
+    let file = store::files(&state.db, &row.id)
+        .await?
+        .into_iter()
+        .find(|f| f.idx == idx as i64)
+        .ok_or(AppError::NotFound)?;
+    let dek = match row.enc_mode() {
+        EncMode::E2e => None,
+        EncMode::Server => {
+            let wrapped = wrapped_dek.ok_or_else(|| AppError::Internal(anyhow::anyhow!("missing download key")))?;
+            Some(crypto::unwrap_with_token(token, &row.id, &wrapped).map_err(|_| AppError::Forbidden("invalid download token".into()))?)
+        }
+    };
+    Ok(Grant { row, file, dek })
+}
+
+/// Reads chunk `n` and, for server mode, decrypts it.
+async fn chunk_bytes(state: &AppState, g: &Grant, idx: u32, n: u64) -> AppResult<Vec<u8>> {
+    let chunks = g.file.chunk_count as u64;
+    let stored = state
+        .blobs
+        .read_chunk(&g.row.id, idx, n, stored_chunk_size(g.row.enc_mode()))
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    match &g.dek {
+        None => Ok(stored),
+        Some(dek) => crypto::open_raw(dek, &crypto::chunk_aad(&g.row.id, idx, n as u32, n + 1 == chunks), &stored)
+            .map_err(|_| AppError::Internal(anyhow::anyhow!("chunk failed to decrypt"))),
+    }
+}
+
 /// Download chunk `n` of file `idx` with the token from a successful open.
 /// E2E shares return ciphertext (decrypt in the browser); server shares return plaintext.
 #[utoipa::path(get, path = "/s/{slug}/files/{idx}/chunks/{n}", tag = "recipient",
@@ -175,44 +228,92 @@ async fn download_chunk(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let token = token_header(&headers, DOWNLOAD_TOKEN_HEADER)?;
-    let row = store::by_slug(&state.db, &slug).await?.ok_or(AppError::NotFound)?;
-    let grant: Option<(Option<Vec<u8>>,)> =
-        sqlx::query_as("SELECT wrapped_dek FROM download_tokens WHERE token_hash = ? AND share_id = ? AND expires_at > ?")
-            .bind(sha256(token.as_bytes()))
-            .bind(&row.id)
-            .bind(now())
-            .fetch_optional(&state.db)
-            .await?;
-    let Some((wrapped_dek,)) = grant else {
-        return Err(AppError::Access(
-            "download_expired",
-            "this download link has expired; open the share again".into(),
-        ));
-    };
-    let file = store::files(&state.db, &row.id)
-        .await?
-        .into_iter()
-        .find(|f| f.idx == idx as i64)
-        .ok_or(AppError::NotFound)?;
-    let chunks = file.chunk_count as u64;
-    if n >= chunks {
+    let g = grant(&state, &slug, idx, token).await?;
+    if n >= g.file.chunk_count as u64 {
         return Err(AppError::NotFound);
     }
-    let mode = row.enc_mode();
-    let stored = state
-        .blobs
-        .read_chunk(&row.id, idx, n, stored_chunk_size(mode))
-        .await
-        .map_err(|_| AppError::NotFound)?;
-    let body = match mode {
-        EncMode::E2e => stored,
-        EncMode::Server => {
-            let wrapped = wrapped_dek.ok_or_else(|| AppError::Internal(anyhow::anyhow!("missing download key")))?;
-            let dek =
-                crypto::unwrap_with_token(token, &row.id, &wrapped).map_err(|_| AppError::Forbidden("invalid download token".into()))?;
-            crypto::open_raw(&dek, &crypto::chunk_aad(&row.id, idx, n as u32, n + 1 == chunks), &stored)
-                .map_err(|_| AppError::Internal(anyhow::anyhow!("chunk failed to decrypt")))?
-        }
-    };
+    let body = chunk_bytes(&state, &g, idx, n).await?;
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], body).into_response())
+}
+
+#[derive(serde::Deserialize, utoipa::ToSchema)]
+pub struct StreamForm {
+    /// Download token from the open response.
+    pub token: String,
+    /// File name for the browser's save dialog.
+    pub name: String,
+}
+
+/// `Content-Disposition: attachment` with an ASCII fallback and an RFC 5987 UTF-8 name.
+fn content_disposition(name: &str) -> String {
+    let ascii: String = name
+        .chars()
+        .map(|c| {
+            if (c.is_ascii_graphic() && !matches!(c, '"' | '\\' | ';' | '%')) || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut encoded = String::new();
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
+        }
+    }
+    format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
+}
+
+/// Server-mode only: decrypt and stream a whole file straight into the browser's download
+/// manager (submitted as a form, so nothing is buffered in page memory).
+#[utoipa::path(post, path = "/s/{slug}/files/{idx}/download", tag = "recipient",
+    params(("slug" = String, Path), ("idx" = u32, Path)),
+    request_body(content = StreamForm, content_type = "application/x-www-form-urlencoded"),
+    responses((status = 200, content_type = "application/octet-stream", body = Vec<u8>), (status = 403, body = crate::error::ErrorBody)))]
+async fn download_stream(
+    State(state): State<AppState>,
+    Path((slug, idx)): Path<(String, u32)>,
+    axum::Form(form): axum::Form<StreamForm>,
+) -> AppResult<Response> {
+    let g = grant(&state, &slug, idx, &form.token).await?;
+    if g.dek.is_none() {
+        return Err(AppError::BadRequest(
+            "end-to-end encrypted files are decrypted in the browser".into(),
+        ));
+    }
+    let size = g.file.size;
+    let chunks = g.file.chunk_count as u64;
+    let stream = futures_util::stream::unfold((state, g, 0u64), move |(state, g, n)| async move {
+        if n >= chunks {
+            return None;
+        }
+        let item = chunk_bytes(&state, &g, idx, n).await.map(axum::body::Bytes::from).map_err(|e| {
+            tracing::error!(error = %e, "streamed download failed");
+            std::io::Error::other("download failed")
+        });
+        Some((item, (state, g, n + 1)))
+    });
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_LENGTH, size.to_string()),
+            (header::CONTENT_DISPOSITION, content_disposition(&form.name)),
+        ],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn content_disposition_is_safe() {
+        let cd = super::content_disposition("r\u{e9}sum\u{e9} \"x\";\r\n.pdf");
+        assert!(!cd.contains('\r') && !cd.contains('\n'));
+        assert!(cd.starts_with("attachment; filename=\"r_sum_ _x____.pdf\""), "{cd}");
+        assert!(cd.ends_with("filename*=UTF-8''r%C3%A9sum%C3%A9%20%22x%22%3B%0D%0A.pdf"), "{cd}");
+    }
 }

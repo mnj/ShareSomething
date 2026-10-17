@@ -38,6 +38,8 @@ impl RateLimiter {
 }
 
 pub struct RateLimiters {
+    /// Coarse per-IP budget for every API call except file chunk transfers.
+    pub api: RateLimiter,
     pub login: RateLimiter,
     pub lookup: RateLimiter,
     pub open: RateLimiter,
@@ -49,6 +51,7 @@ pub struct RateLimiters {
 impl Default for RateLimiters {
     fn default() -> Self {
         Self {
+            api: RateLimiter::new(600, Duration::from_secs(60)),
             login: RateLimiter::new(10, Duration::from_secs(300)),
             lookup: RateLimiter::new(120, Duration::from_secs(60)),
             open: RateLimiter::new(30, Duration::from_secs(60)),

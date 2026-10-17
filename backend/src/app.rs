@@ -3,7 +3,7 @@ use std::{ops::Deref, sync::Arc};
 use sqlx::SqlitePool;
 
 use crate::{
-    auth::oidc::OidcProviders,
+    auth::{oidc::OidcProviders, passkey::Passkeys},
     blobs::Blobs,
     config::Config,
     crypto::MasterKey,
@@ -25,6 +25,7 @@ pub struct Inner {
     pub blobs: Blobs,
     pub mailer: Mailer,
     pub oidc: OidcProviders,
+    pub passkeys: Passkeys,
 }
 
 impl Deref for AppState {
@@ -40,6 +41,7 @@ impl AppState {
         let blobs = Blobs::new(&cfg.data_dir);
         let mailer = Mailer::from_config(&cfg.email)?;
         let oidc = OidcProviders::new(&cfg.oidc)?;
+        let passkeys = Passkeys::new(&cfg);
         let proxy = ProxySettings {
             mode: cfg.proxy.mode,
             trusted: cfg.trusted_proxies()?,
@@ -54,6 +56,7 @@ impl AppState {
             blobs,
             mailer,
             oidc,
+            passkeys,
         })))
     }
 

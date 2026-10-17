@@ -1178,3 +1178,235 @@ async fn github_sign_in_uses_verified_emails_only() {
     let me = t.get("/api/recipient/me", Some(&cookie.unwrap())).await;
     assert_eq!(me.body["identities"], json!([{"email": "dev@acme.com", "method": "oidc:gh"}]));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Phase 5: passkeys, policy templates, streaming downloads, API rate limit
+// ---------------------------------------------------------------------------------------------
+
+mod passkeys {
+    use webauthn_authenticator_rs::{WebauthnAuthenticator, softpasskey::SoftPasskey};
+
+    use super::*;
+
+    pub fn authenticator() -> WebauthnAuthenticator<SoftPasskey> {
+        WebauthnAuthenticator::new(SoftPasskey::new(true))
+    }
+
+    fn origin() -> url::Url {
+        url::Url::parse(ORIGIN).unwrap()
+    }
+
+    pub async fn register(t: &TestApp, c: &str, auth: &mut WebauthnAuthenticator<SoftPasskey>, name: &str) -> Value {
+        let start = t.post("/api/auth/passkey/register/start", json!({"name": name}), Some(c)).await;
+        assert_eq!(start.status, StatusCode::OK, "{}", start.body);
+        let cred = auth
+            .do_registration(origin(), serde_json::from_value(start.body["options"].clone()).unwrap())
+            .unwrap();
+        let fin = t
+            .post(
+                "/api/auth/passkey/register/finish",
+                json!({"ceremony_id": start.body["ceremony_id"], "credential": cred}),
+                Some(c),
+            )
+            .await;
+        assert_eq!(fin.status, StatusCode::OK, "{}", fin.body);
+        fin.body
+    }
+
+    /// Runs a login or step-up ceremony; returns the finish response.
+    pub async fn assert_with(t: &TestApp, kind: &str, c: Option<&str>, auth: &mut WebauthnAuthenticator<SoftPasskey>) -> Resp {
+        let start = t.post(&format!("/api/auth/passkey/{kind}/start"), json!({}), c).await;
+        assert_eq!(start.status, StatusCode::OK, "{}", start.body);
+        let cred = auth
+            .do_authentication(origin(), serde_json::from_value(start.body["options"].clone()).unwrap())
+            .unwrap();
+        t.post(
+            &format!("/api/auth/passkey/{kind}/finish"),
+            json!({"ceremony_id": start.body["ceremony_id"], "credential": cred}),
+            c,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn register_login_step_up_and_delete() {
+        let t = TestApp::new().await;
+        let c = t.login().await;
+        let mut auth = authenticator();
+        let pk = register(&t, &c, &mut auth, "Laptop").await;
+        assert_eq!(pk["name"], "Laptop");
+        assert_eq!(t.get("/api/auth/me", None).await.body["passkeys"], 1);
+        assert_eq!(t.get("/api/auth/passkeys", Some(&c)).await.body.as_array().unwrap().len(), 1);
+
+        // Passwordless sign-in counts as a fresh MFA.
+        let r = assert_with(&t, "login", None, &mut auth).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+        assert!(r.body["mfa_valid_until"].as_i64().unwrap() > now());
+        let pc = r.cookie.unwrap();
+        assert_eq!(t.get("/api/shares", Some(&pc)).await.status, StatusCode::OK);
+        let listed = t.get("/api/auth/passkeys", Some(&pc)).await;
+        assert!(listed.body[0]["last_used_at"].is_i64(), "use is recorded");
+
+        // Step-up after the MFA has gone stale.
+        sqlx::query("UPDATE owner_sessions SET mfa_at = ?")
+            .bind(now() - 3600)
+            .execute(&t.state.db)
+            .await
+            .unwrap();
+        let id = pk["id"].as_str().unwrap();
+        let r = t
+            .req("DELETE", &format!("/api/auth/passkeys/{id}"), None, Some(&pc), "198.51.100.1", &[])
+            .await;
+        assert_eq!(r.body["error"], "need_owner_mfa", "deleting needs a fresh MFA");
+        let r = assert_with(&t, "step-up", Some(&pc), &mut auth).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+        let r = t
+            .req("DELETE", &format!("/api/auth/passkeys/{id}"), None, Some(&pc), "198.51.100.1", &[])
+            .await;
+        assert_eq!(r.status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            t.post("/api/auth/passkey/login/start", json!({}), None).await.status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_authenticator_and_replayed_ceremony_fail() {
+        let t = TestApp::new().await;
+        let c = t.login().await;
+        register(&t, &c, &mut authenticator(), "Phone").await;
+        // A different authenticator has no matching credential.
+        let start = t.post("/api/auth/passkey/login/start", json!({}), None).await;
+        let other = authenticator().do_authentication(
+            url::Url::parse(ORIGIN).unwrap(),
+            serde_json::from_value(start.body["options"].clone()).unwrap(),
+        );
+        assert!(other.is_err(), "soft authenticator refuses unknown credentials");
+        let fin = t
+            .post(
+                "/api/auth/passkey/login/finish",
+                json!({"ceremony_id": start.body["ceremony_id"], "credential": {"id": "x"}}),
+                None,
+            )
+            .await;
+        assert_eq!(fin.status, StatusCode::BAD_REQUEST);
+        let again = t
+            .post(
+                "/api/auth/passkey/login/finish",
+                json!({"ceremony_id": start.body["ceremony_id"], "credential": {"id": "x"}}),
+                None,
+            )
+            .await;
+        assert_eq!(again.body["error"], "ceremony_expired", "ceremonies are single use");
+    }
+
+    #[tokio::test]
+    async fn registering_needs_fresh_mfa() {
+        let t = TestApp::new().await;
+        let c = t.login().await;
+        sqlx::query("UPDATE owner_sessions SET mfa_at = NULL")
+            .execute(&t.state.db)
+            .await
+            .unwrap();
+        let r = t.post("/api/auth/passkey/register/start", json!({"name": "x"}), Some(&c)).await;
+        assert_eq!(r.body["error"], "need_owner_mfa");
+    }
+}
+
+#[tokio::test]
+async fn policy_templates_crud() {
+    let t = TestApp::new().await;
+    let c = t.login().await;
+    let office = json!([{"group": "include", "type": "ip", "cidrs": ["10.1.2.3/8"]}]);
+    let r = t
+        .post("/api/policy-templates", json!({"name": "Office", "policy": office}), Some(&c))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["policy"][0]["cidrs"][0], "10.0.0.0/8", "rules are normalised");
+    let id = r.body["id"].as_str().unwrap().to_string();
+    // Same name replaces the rules but keeps the id.
+    let r = t
+        .post(
+            "/api/policy-templates",
+            json!({"name": "Office", "policy": [{"group": "include", "type": "owner"}]}),
+            Some(&c),
+        )
+        .await;
+    assert_eq!(r.body["id"], id);
+    let list = t.get("/api/policy-templates", Some(&c)).await;
+    assert_eq!(list.body.as_array().unwrap().len(), 1);
+    assert_eq!(list.body[0]["policy"][0]["type"], "owner");
+    let bad = t
+        .post(
+            "/api/policy-templates",
+            json!({"name": "Bad", "policy": [{"group": "exclude", "type": "owner"}]}),
+            Some(&c),
+        )
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    assert_eq!(t.get("/api/policy-templates", None).await.status, StatusCode::UNAUTHORIZED);
+    let r = t
+        .req(
+            "DELETE",
+            &format!("/api/policy-templates/{id}"),
+            None,
+            Some(&c),
+            "198.51.100.1",
+            &[],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn server_file_streams_as_attachment() {
+    let t = TestApp::new().await;
+    let c = t.login().await;
+    let data = file_bytes(CHUNK * 2 + 77, 9);
+    let created = t.create_full(&c, server_files_share(&[data.len()])).await;
+    upload_all(&t, &c, &created, std::slice::from_ref(&data), false).await;
+    let id = created["share"]["id"].as_str().unwrap();
+    let token = created["upload_token"].as_str().unwrap();
+    t.raw(
+        "POST",
+        &format!("/api/shares/{id}/finalize"),
+        vec![],
+        Some(&c),
+        &[("x-upload-token", token)],
+    )
+    .await;
+    let slug = created["share"]["slug"].as_str().unwrap();
+    let open = t.post(&format!("/api/s/{slug}/open"), json!({}), None).await;
+    let dl = open.body["download_token"].as_str().unwrap();
+
+    let form = format!("token={dl}&name=r%C3%A9sum%C3%A9.bin");
+    let ct = [("content-type", "application/x-www-form-urlencoded")];
+    let (st, body) = t
+        .raw("POST", &format!("/api/s/{slug}/files/0/download"), form.into_bytes(), None, &ct)
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body, data);
+    let (st, _) = t
+        .raw(
+            "POST",
+            &format!("/api/s/{slug}/files/0/download"),
+            b"token=bad&name=x".to_vec(),
+            None,
+            &ct,
+        )
+        .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn api_requests_are_rate_limited_per_ip() {
+    let t = TestApp::new().await;
+    let mut last = StatusCode::OK;
+    for _ in 0..601 {
+        last = t.get("/api/auth/me", None).await.status;
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+    // Another client is unaffected.
+    let r = t.req("GET", "/api/auth/me", None, None, "198.51.100.2", &[]).await;
+    assert_eq!(r.status, StatusCode::OK);
+}

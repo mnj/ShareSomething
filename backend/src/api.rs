@@ -22,10 +22,12 @@ pub fn api_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi()).nest(
         "/api",
         auth::owner::router()
+            .merge(auth::passkey::router())
             .merge(auth::recipient::router())
             .merge(auth::oidc::router())
             .merge(shares::handlers::router())
-            .merge(shares::files::router()),
+            .merge(shares::files::router())
+            .merge(shares::templates::router()),
     )
 }
 
@@ -42,6 +44,7 @@ pub fn router(state: AppState) -> Router {
     let body_limit = (state.cfg.max_text_bytes * 2).max(crate::blobs::CHUNK_SIZE) + 64 * 1024;
     let mut app = api
         .layer(middleware::from_fn_with_state(state.clone(), origin_check))
+        .layer(middleware::from_fn_with_state(state.clone(), api_rate_limit))
         .layer(DefaultBodyLimit::max(body_limit))
         .route("/healthz", get(healthz))
         .route(
@@ -90,6 +93,25 @@ async fn no_store_api(req: Request, next: Next) -> Response {
             .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     res
+}
+
+/// Per-IP request budget for the API. Chunk uploads/downloads are excluded: they're already
+/// bound to an unguessable token, and a large file legitimately needs thousands of them.
+async fn api_rate_limit(State(state): State<AppState>, req: Request, next: Next) -> Result<Response, AppError> {
+    let path = req.uri().path();
+    if !path.contains("/chunks/") && !path.ends_with("/download") {
+        let peer = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|c| c.0.ip());
+        if let Some(peer) = peer {
+            let client = state.proxy.resolve(peer, req.headers());
+            if !state.limits.api.check(&client.ip.to_string()) {
+                return Err(AppError::TooManyRequests);
+            }
+        }
+    }
+    Ok(next.run(req).await)
 }
 
 /// CSRF defence in depth on top of SameSite=Strict cookies: state-changing requests must come
