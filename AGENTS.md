@@ -130,6 +130,17 @@ Migrations live in `backend/migrations/`. Add a new numbered file; never edit an
       and consumed in the same transaction as the view. Deciding needs a fresh MFA.
     - **Split keys:** Shamir in the browser (`crypto/shamir.ts`). The server only stores
       `{k, n, check}`, and the browser verifies the combined key against `check` *before* opening.
+18. **Team mode** (`mode = "team"`):
+    - **Org policies** (`org::settings::OrgSettings::enforce`) run in every handler that creates or
+      changes a share or a saved policy. The UI only mirrors them; the server is the authority.
+    - **Admins see metadata, never content.** Admin share endpoints return `ShareSummary` only and
+      can revoke, but there is no admin path to ciphertext, keys or file chunks.
+    - Last-admin and self guards: an admin can't demote or disable themselves, and the last active
+      admin can't be removed. Disabling a user or resetting MFA ends their sessions.
+    - Invite tokens are stored hashed, single-use and expiring. SSO members are provisioned only
+      from `team.allowed_domains` (or an existing invite), and disabled users are refused.
+    - `member`/`group`/`user` rules match the visitor's *account session*, never an email code.
+    - Org-wide templates use `owner_id = 0`; only admins write them.
 
 ## Common tasks
 
@@ -178,6 +189,7 @@ by older clients must still open.
 
 ## Roadmap
 
-All five planned phases are done, plus service-worker streaming, TOTP setup in the UI and
-dashboard editing. Possible next steps: email notifications when a share is opened, multiple
-owner accounts, and S3-compatible blob storage.
+v2 plan (team product): accounts + audit/SIEM, share modes (approval, time-lock, split keys,
+notifications) and team mode (invites, SSO members, groups, org policies, admin console) are
+done. Next: user key pairs with passkey-PRF / PIN unlock and request mode, then the shared
+zero-knowledge vault.

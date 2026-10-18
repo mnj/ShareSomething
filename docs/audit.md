@@ -79,7 +79,11 @@ document, so they map naturally onto Elastic, Splunk CIM, Sentinel and others:
 | `auth.mfa.step_up` / `auth.mfa.step_up_failed` | Fresh-MFA confirmation | `method` |
 | `auth.passkey.added` / `auth.passkey.removed` | Passkey changes | passkey id/name |
 | `auth.totp.enabled` / `auth.totp.disabled` / `auth.password.changed` | Credential changes (web or CLI) | |
-| `user.created` / `user.updated` | Account administration and profile changes | role, changed fields |
+| `user.created` / `user.updated` | Account administration and profile changes; SSO auto-provisioning | role, changed fields |
+| `user.invited` / `user.invite_accepted` | Team invites | target user, `role`, `reissued`; `method` for SSO |
+| `user.mfa_reset` / `user.sessions_revoked` | Admin reset a member's MFA / signed them out everywhere | |
+| `group.created` / `group.updated` / `group.deleted` | Groups and membership | group name, `members` (user ids) |
+| `org.settings_changed` | Org policies changed | `before` and `after` |
 | `share.created` / `share.updated` | Share lifecycle | kind, encryption, limits, the full access **policy**, changed fields |
 | `share.revoked` / `share.deleted` / `share.purged` | Removal (manual, or by retention) | |
 | `share.opened` | Content released | `burned`, `views`, `max_views` |

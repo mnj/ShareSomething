@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, unwrap } from '../api/client'
@@ -19,6 +19,11 @@ export function Login() {
   const [busy, setBusy] = useState(false)
   const next = params.get('next')
   const target = next && next.startsWith('/') && !next.startsWith('//') ? next : '/'
+  const sso = useQuery({
+    queryKey: ['sso-providers'],
+    queryFn: () => unwrap(api.GET('/api/auth/sso-providers')),
+    enabled: me.data?.mode === 'team',
+  })
 
   if (me.data && !me.data.initialised) {
     return (
@@ -32,6 +37,7 @@ export function Login() {
   }
 
   const team = me.data?.mode === 'team'
+  const ssoError = params.get('sso_error')
   // Team mode: we don't know the account's factors until the server answers, so ask when needed.
   const showTotp = needTotp || (!team && !!me.data?.totp_enabled)
   const offerPasskey = webauthnSupported() && (team || !!me.data?.passkeys)
@@ -71,6 +77,17 @@ export function Login() {
       }}
     >
       <h1>Sign in</h1>
+      {ssoError && <p className="note note-error" role="alert">{SSO_ERRORS[ssoError] ?? 'Single sign-on failed. Try again or ask your admin.'}</p>}
+      {team && !!sso.data?.length && (
+        <>
+          {sso.data.map((p) => (
+            <a key={p.id} className="btn btn-primary" href={`/api/recipient/oidc/${encodeURIComponent(p.id)}/start?purpose=member&next=${encodeURIComponent(target)}`}>
+              Sign in with {p.name}
+            </a>
+          ))}
+          <div className="divider">or with a local account</div>
+        </>
+      )}
       {team && (
         <label className="field">
           Email
@@ -101,4 +118,11 @@ export function Login() {
       </button>
     </form>
   )
+}
+
+const SSO_ERRORS: Record<string, string> = {
+  not_a_member: "Your account isn't allowed to sign in here. Ask your admin for an invite.",
+  account_disabled: 'Your account has been disabled.',
+  no_verified_email: "Your identity provider didn't share a verified email address.",
+  provider_error: 'Single sign-on failed. Try again.',
 }

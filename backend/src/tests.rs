@@ -2,6 +2,7 @@
 
 mod audit;
 mod modes;
+mod team;
 
 use std::net::SocketAddr;
 
@@ -1106,6 +1107,7 @@ async fn oidc_app() -> (TestApp, String) {
                 client_secret: "secret".into(),
                 scopes: vec![],
                 trust_unverified_email: false,
+                member_login: false,
                 github_web_url: None,
                 github_api_url: None,
             },
@@ -1118,6 +1120,7 @@ async fn oidc_app() -> (TestApp, String) {
                 client_secret: "gh-secret".into(),
                 scopes: vec![],
                 trust_unverified_email: false,
+                member_login: false,
                 github_web_url: Some(issuer.clone()),
                 github_api_url: Some(issuer),
             },

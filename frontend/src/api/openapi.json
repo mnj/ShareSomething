@@ -10,6 +10,268 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/admin/shares": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Every share in the organisation: settings and status only, never content.",
+        "operationId": "admin_shares_list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminShare"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/shares/{id}/revoke": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Revoke any share (its content is destroyed immediately).",
+        "operationId": "admin_shares_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "All accounts.",
+        "operationId": "admin_users_list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminUser"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Invite someone. With local accounts they get a link to set a password; with SSO only they\nsimply sign in with their company account.",
+        "operationId": "admin_users_invite",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{id}": {
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Change a user's role, name, or enable/disable the account. Disabling signs them out everywhere.",
+        "operationId": "admin_users_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUser"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{id}/reinvite": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Issue a fresh invite link (the old one stops working).",
+        "operationId": "admin_users_reinvite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{id}/reset-mfa": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Remove a user's TOTP and passkeys (e.g. lost device) and sign them out.",
+        "operationId": "admin_users_reset_mfa",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUser"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{id}/sign-out": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Sign a user out of every session.",
+        "operationId": "admin_users_sign_out",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/api/approvals": {
       "get": {
         "tags": [
@@ -852,6 +1114,30 @@
         }
       }
     },
+    "/api/auth/sso-providers": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Providers members can sign in with (team mode).",
+        "operationId": "sso_providers",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SsoProvider"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/step-up": {
       "post": {
         "tags": [
@@ -996,6 +1282,322 @@
         }
       }
     },
+    "/api/directory/users": {
+      "get": {
+        "tags": [
+          "org"
+        ],
+        "summary": "Active members, for picking people in access rules.",
+        "operationId": "directory_users",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DirectoryUser"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/groups": {
+      "get": {
+        "tags": [
+          "org"
+        ],
+        "summary": "All groups (any signed-in user, for access rules).",
+        "operationId": "groups_list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Group"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "org"
+        ],
+        "summary": "Create a group (admins).",
+        "operationId": "groups_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/groups/{id}": {
+      "delete": {
+        "tags": [
+          "org"
+        ],
+        "summary": "Delete a group (admins). Shares that named it simply stop matching it.",
+        "operationId": "groups_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "org"
+        ],
+        "summary": "Rename or describe a group (admins).",
+        "operationId": "groups_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/groups/{id}/members": {
+      "get": {
+        "tags": [
+          "org"
+        ],
+        "summary": "A group's member ids.",
+        "operationId": "groups_members",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Members"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "org"
+        ],
+        "summary": "Replace a group's members (admins).",
+        "operationId": "groups_set_members",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Members"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/invites/{token}": {
+      "get": {
+        "tags": [
+          "org"
+        ],
+        "summary": "Who an invite link is for (404 when invalid or expired).",
+        "operationId": "invite_info",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteInfo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/invites/{token}/accept": {
+      "post": {
+        "tags": [
+          "org"
+        ],
+        "summary": "Accept an invite: set a password, activate the account and sign in.",
+        "operationId": "invite_accept",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInvite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/notifications": {
       "get": {
         "tags": [
@@ -1042,6 +1644,66 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NotificationList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/org/settings": {
+      "get": {
+        "tags": [
+          "org"
+        ],
+        "summary": "Org policies (readable by everyone signed in, so the UI can explain limits).",
+        "operationId": "org_settings_get",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgSettings"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "org"
+        ],
+        "summary": "Replace org policies (admins).",
+        "operationId": "org_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrgSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgSettings"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -1371,6 +2033,18 @@
             "name": "next",
             "in": "query",
             "description": "Path to return to after signing in, e.g. `/s/my-share`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "purpose",
+            "in": "query",
+            "description": "`member`: sign in to your ShareSomething account (team SSO). Default: verify a recipient.",
             "required": false,
             "schema": {
               "type": [
@@ -2072,6 +2746,23 @@
   },
   "components": {
     "schemas": {
+      "AcceptInvite": {
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
       "AccessLogEntry": {
         "type": "object",
         "description": "One line of a share's activity log (a view of the audit records targeting the share).",
@@ -2123,11 +2814,90 @@
           "ready",
           "need_passphrase",
           "need_owner_login",
+          "need_login",
           "need_owner_mfa",
           "need_auth",
           "denied",
           "not_yet"
         ]
+      },
+      "AdminShare": {
+        "type": "object",
+        "required": [
+          "share",
+          "owner_id",
+          "owner"
+        ],
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "share": {
+            "$ref": "#/components/schemas/ShareSummary"
+          }
+        }
+      },
+      "AdminUser": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "role",
+          "status",
+          "created_at",
+          "totp",
+          "passkeys"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_login_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "passkeys": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "sso_provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "active | invited | disabled"
+          },
+          "totp": {
+            "type": "boolean"
+          }
+        }
       },
       "AuditPage": {
         "type": "object",
@@ -2415,6 +3185,28 @@
           }
         }
       },
+      "DirectoryUser": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "EmailStartRequest": {
         "type": "object",
         "required": [
@@ -2593,6 +3385,45 @@
           }
         }
       },
+      "Group": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "members"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "members": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "GroupInput": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "IdentityInfo": {
         "type": "object",
         "required": [
@@ -2605,6 +3436,65 @@
           },
           "method": {
             "type": "string"
+          }
+        }
+      },
+      "InviteInfo": {
+        "type": "object",
+        "required": [
+          "email",
+          "name"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "InviteRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        }
+      },
+      "InviteResult": {
+        "type": "object",
+        "required": [
+          "user",
+          "emailed"
+        ],
+        "properties": {
+          "emailed": {
+            "type": "boolean",
+            "description": "Whether the invite was also emailed."
+          },
+          "invite_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Link for the invitee to set a password (absent when local accounts are disabled: they use SSO)."
+          },
+          "user": {
+            "$ref": "#/components/schemas/AdminUser"
           }
         }
       },
@@ -2652,7 +3542,8 @@
           "initialised",
           "mode",
           "totp_enabled",
-          "passkeys"
+          "passkeys",
+          "mfa_setup_required"
         ],
         "properties": {
           "authenticated": {
@@ -2660,6 +3551,10 @@
           },
           "initialised": {
             "type": "boolean"
+          },
+          "mfa_setup_required": {
+            "type": "boolean",
+            "description": "The org requires MFA and this user hasn't set any up yet (sharing is blocked until they do)."
           },
           "mfa_valid_until": {
             "type": [
@@ -2691,6 +3586,21 @@
                 "$ref": "#/components/schemas/UserInfo"
               }
             ]
+          }
+        }
+      },
+      "Members": {
+        "type": "object",
+        "required": [
+          "user_ids"
+        ],
+        "properties": {
+          "user_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
           }
         }
       },
@@ -2969,6 +3879,60 @@
           }
         ]
       },
+      "OrgSettings": {
+        "type": "object",
+        "properties": {
+          "allow_public_shares": {
+            "type": "boolean",
+            "description": "Allow \"anyone with the link\" shares (otherwise every share needs an access rule).",
+            "default": true
+          },
+          "allowed_recipient_domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Email domains that email/domain rules may name (empty = any).",
+            "default": []
+          },
+          "allowed_slug_generators": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Link styles members may use (empty = all enabled).",
+            "default": []
+          },
+          "force_e2e": {
+            "type": "boolean",
+            "description": "Every share must be end-to-end encrypted.",
+            "default": false
+          },
+          "max_expiry_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Longest allowed lifetime in days; when set, every share must expire.",
+            "default": null
+          },
+          "max_views": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Highest allowed view limit; when set, every share must have one.",
+            "default": null
+          },
+          "require_mfa": {
+            "type": "boolean",
+            "description": "Users must set up a passkey or authenticator app before they can create shares.",
+            "default": false
+          }
+        }
+      },
       "PasskeyInfo": {
         "type": "object",
         "required": [
@@ -3071,7 +4035,8 @@
           "id",
           "name",
           "policy",
-          "created_at"
+          "created_at",
+          "org"
         ],
         "properties": {
           "created_at": {
@@ -3083,6 +4048,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "org": {
+            "type": "boolean",
+            "description": "Shared with the whole organisation (managed by admins)."
           },
           "policy": {
             "type": "array",
@@ -3399,6 +4368,67 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Any signed-in user of this ShareSomething (team members).",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "member"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Signed-in members of any of these groups (group ids).",
+            "required": [
+              "groups",
+              "type"
+            ],
+            "properties": {
+              "groups": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "group"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "These signed-in users (user ids).",
+            "required": [
+              "users",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "users": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              }
+            }
           }
         ]
       },
@@ -3419,6 +4449,10 @@
         "properties": {
           "name": {
             "type": "string"
+          },
+          "org": {
+            "type": "boolean",
+            "description": "Admins: save for everyone in the organisation."
           },
           "policy": {
             "type": "array",
@@ -3875,6 +4909,21 @@
           }
         }
       },
+      "SsoProvider": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "StepUpRequest": {
         "type": "object",
         "required": [
@@ -4040,6 +5089,34 @@
           },
           "role": {
             "$ref": "#/components/schemas/Role"
+          }
+        }
+      },
+      "UserUpdate": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Role"
+              }
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`active` or `disabled`."
           }
         }
       },

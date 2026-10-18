@@ -12,6 +12,7 @@ mod jobs;
 mod mailer;
 mod net;
 mod notify;
+mod org;
 mod shares;
 mod slug;
 mod static_files;

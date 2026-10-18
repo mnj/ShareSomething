@@ -28,6 +28,7 @@ use crate::{
     error::{AppError, AppResult},
     net::client_ip::ClientInfo,
     notify,
+    org::settings::ShareParams,
     slug::GeneratorInfo,
     util::{now, random_token, sha256},
 };
@@ -52,7 +53,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 // Owner API
 // ---------------------------------------------------------------------------------------------
 
-fn summary(state: &AppState, row: &ShareRow, policy: Vec<PolicyRule>) -> ShareSummary {
+pub(crate) fn summary(state: &AppState, row: &ShareRow, policy: Vec<PolicyRule>) -> ShareSummary {
     let opts: Value = serde_json::from_str(&row.slug_opts).unwrap_or_default();
     ShareSummary {
         id: row.id.clone(),
@@ -118,6 +119,40 @@ fn validate_split(split: SplitSpec, mode: EncMode, meta: &Option<Value>, passphr
         return Err(AppError::BadRequest(
             "enc_meta.split must match k and n and carry a key check".into(),
         ));
+    }
+    Ok(())
+}
+
+/// Group and user rules must name groups/users that exist (and are active).
+pub(super) async fn validate_references(state: &AppState, rules: &[PolicyRule]) -> AppResult<()> {
+    for r in rules {
+        match &r.rule {
+            Rule::Group { groups } => {
+                for g in groups {
+                    if sqlx::query("SELECT 1 FROM groups WHERE id = ?")
+                        .bind(g)
+                        .fetch_optional(&state.db)
+                        .await?
+                        .is_none()
+                    {
+                        return Err(AppError::BadRequest(format!("unknown group {g}")));
+                    }
+                }
+            }
+            Rule::User { users } => {
+                for u in users {
+                    if sqlx::query("SELECT 1 FROM users WHERE id = ? AND status != 'disabled'")
+                        .bind(u)
+                        .fetch_optional(&state.db)
+                        .await?
+                        .is_none()
+                    {
+                        return Err(AppError::BadRequest(format!("unknown user {u}")));
+                    }
+                }
+            }
+            _ => {}
+        }
     }
     Ok(())
 }
@@ -241,7 +276,7 @@ async fn create_share(
     user: CurrentUser,
     Json(req): Json<CreateShareRequest>,
 ) -> AppResult<(StatusCode, Json<CreateShareResponse>)> {
-    user.can_share()?;
+    user.ensure_can_share(&state).await?;
     let title = validate_title(req.title)?;
     let file_sizes = validate_file_specs(&state, req.kind, req.files.as_deref())?;
     validate_redirect(req.kind, req.redirect_secs, false)?;
@@ -257,6 +292,7 @@ async fn create_share(
         validate_split(split, req.enc_mode, &req.enc_meta, req.passphrase_verifier.is_some())?;
     }
     let rules = validate_policy(&state, req.policy)?;
+    validate_references(&state, &rules).await?;
     validate_mfa_toggle(&state, &user, req.require_owner_mfa).await?;
     if req.max_views.is_some_and(|m| !(1..=MAX_VIEWS).contains(&m)) {
         return Err(AppError::BadRequest(format!("max_views must be 1..{MAX_VIEWS}")));
@@ -344,6 +380,13 @@ async fn create_share(
     };
 
     let expires_at = req.expires_in_secs.map(|s| now() + s);
+    crate::org::settings::load(&state).await?.enforce(&ShareParams {
+        enc_mode: Some(req.enc_mode),
+        expires_at: Some(expires_at),
+        max_views: Some(req.max_views),
+        policy: Some(&rules),
+        slug_generator: Some(&generator),
+    })?;
     let is_files = req.kind == ShareKind::Files;
     let upload_token = is_files.then(random_token);
     let upload_dek = upload_token
@@ -483,6 +526,16 @@ async fn update_share(
 ) -> AppResult<Json<ShareSummary>> {
     let row = owned(&state, &user, &id).await?;
     let policy = req.policy.map(|p| validate_policy(&state, p)).transpose()?;
+    if let Some(p) = &policy {
+        validate_references(&state, p).await?;
+    }
+    crate::org::settings::load(&state).await?.enforce(&ShareParams {
+        enc_mode: None,
+        expires_at: req.expires_at.map(|t| (t != 0).then_some(t)),
+        max_views: req.max_views.map(|m| (m != 0).then_some(m)),
+        policy: policy.as_deref(),
+        slug_generator: None,
+    })?;
     if let Some(m) = req.require_owner_mfa {
         validate_mfa_toggle(&state, &user, m).await?;
     }
@@ -693,17 +746,33 @@ async fn preview_slug(
 // Recipient API
 // ---------------------------------------------------------------------------------------------
 
-fn access_context(client: &ClientInfo, user: Option<&CurrentUser>, recipient: &Recipient) -> AccessContext {
-    AccessContext {
+async fn access_context(
+    state: &AppState,
+    client: &ClientInfo,
+    user: Option<&CurrentUser>,
+    recipient: &Recipient,
+) -> AppResult<AccessContext> {
+    let user = match user {
+        Some(u) => {
+            let groups: Vec<(i64,)> = sqlx::query_as("SELECT group_id FROM group_members WHERE user_id = ?")
+                .bind(u.id)
+                .fetch_all(&state.db)
+                .await?;
+            Some(UserCtx {
+                id: u.id,
+                mfa_at: u.mfa_at,
+                groups: groups.into_iter().map(|g| g.0).collect(),
+            })
+        }
+        None => None,
+    };
+    Ok(AccessContext {
         now: now(),
         ip: client.ip,
         country: client.country.clone(),
-        user: user.map(|u| UserCtx {
-            id: u.id,
-            mfa_at: u.mfa_at,
-        }),
+        user,
         identities: recipient.identities.clone(),
-    }
+    })
 }
 
 /// Attributes a share-visit event to whoever the visitor is: a signed-in user or a recipient.
@@ -722,6 +791,7 @@ fn decision_reason(d: &Decision) -> &'static str {
         Decision::Unavailable => "unavailable",
         Decision::Denied => "policy",
         Decision::NeedOwnerLogin => "owner_login_required",
+        Decision::NeedUserLogin => "account_login_required",
         Decision::NeedOwnerMfa => "owner_mfa_required",
         Decision::NeedRecipientAuth(_) => "sign_in_required",
         Decision::NotYet(_) => "time_locked",
@@ -757,6 +827,7 @@ fn decision_error(d: &Decision) -> AppError {
         Decision::Unavailable => AppError::NotFound,
         Decision::Denied => AppError::Access("denied", "you don't have access to this share".into()),
         Decision::NeedOwnerLogin => AppError::Access("need_owner_login", "sign in as the owner to open this share".into()),
+        Decision::NeedUserLogin => AppError::Access("need_login", "sign in with your account to open this share".into()),
         Decision::NeedOwnerMfa => AppError::Access("need_owner_mfa", "confirm your authenticator code to open this share".into()),
         Decision::NeedRecipientAuth(_) => AppError::Access("need_auth", "sign in to open this share".into()),
         Decision::NotYet(at) => AppError::Access(
@@ -781,7 +852,10 @@ async fn share_info(
     }
     let row = store::by_slug(&state.db, &slug).await?.ok_or(AppError::NotFound)?;
     let rules = store::rules(&state.db, &row.id).await?;
-    let decision = policy::evaluate(&row.state(rules), &access_context(&client, user.as_ref(), &recipient));
+    let decision = policy::evaluate(
+        &row.state(rules),
+        &access_context(&state, &client, user.as_ref(), &recipient).await?,
+    );
 
     let (status, auth_methods) = match &decision {
         Decision::Unavailable => return Err(AppError::NotFound),
@@ -789,6 +863,7 @@ async fn share_info(
         Decision::Allow => (AccessStatus::Ready, vec![]),
         Decision::Denied => (AccessStatus::Denied, vec![]),
         Decision::NeedOwnerLogin => (AccessStatus::NeedOwnerLogin, vec![]),
+        Decision::NeedUserLogin => (AccessStatus::NeedLogin, vec![]),
         Decision::NeedOwnerMfa => (AccessStatus::NeedOwnerMfa, vec![]),
         Decision::NotYet(_) => (AccessStatus::NotYet, vec![]),
         Decision::NeedRecipientAuth(m) => (AccessStatus::NeedAuth, offered_methods(&state, m)),
@@ -868,7 +943,10 @@ async fn open_share(
     let req = body.map(|b| b.0).unwrap_or_default();
     let row = store::by_slug(&state.db, &slug).await?.ok_or(AppError::NotFound)?;
     let rules = store::rules(&state.db, &row.id).await?;
-    let decision = policy::evaluate(&row.state(rules), &access_context(&client, user.as_ref(), &recipient));
+    let decision = policy::evaluate(
+        &row.state(rules),
+        &access_context(&state, &client, user.as_ref(), &recipient).await?,
+    );
     if decision != Decision::Allow {
         if decision != Decision::Unavailable {
             let e = visitor(row.event(Action::ShareDenied).denied(), &client, user.as_ref(), &recipient)

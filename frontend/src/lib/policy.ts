@@ -34,6 +34,12 @@ export function rowsToPolicy(rows: RuleRow[]): PolicyRule[] {
         return { group, type, emails: list, methods }
       case 'email_domain':
         return { group, type, domains: list, methods }
+      case 'member':
+        return { group, type }
+      case 'group':
+        return { group, type, groups: list.map(Number).filter(Boolean) }
+      case 'user':
+        return { group, type, users: list.map(Number).filter(Boolean) }
     }
   })
 }
@@ -53,6 +59,12 @@ export function policyToRows(policy: PolicyRule[]): RuleRow[] {
         return { group: r.group, type: r.type, values: r.emails.join(', '), method: r.methods?.[0] ?? '' }
       case 'email_domain':
         return { group: r.group, type: r.type, values: r.domains.join(', '), method: r.methods?.[0] ?? '' }
+      case 'member':
+        return { group: r.group, type: r.type, values: '' }
+      case 'group':
+        return { group: r.group, type: r.type, values: r.groups.join(', ') }
+      case 'user':
+        return { group: r.group, type: r.type, values: r.users.join(', ') }
     }
   })
 }

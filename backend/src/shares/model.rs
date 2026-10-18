@@ -305,6 +305,8 @@ pub enum AccessStatus {
     Ready,
     NeedPassphrase,
     NeedOwnerLogin,
+    /// Sign in with your ShareSomething account (team rules).
+    NeedLogin,
     NeedOwnerMfa,
     NeedAuth,
     Denied,

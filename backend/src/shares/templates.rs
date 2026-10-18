@@ -25,31 +25,40 @@ pub struct PolicyTemplate {
     pub name: String,
     pub policy: Vec<PolicyRule>,
     pub created_at: i64,
+    /// Shared with the whole organisation (managed by admins).
+    pub org: bool,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct SaveTemplate {
     pub name: String,
     pub policy: Vec<PolicyRule>,
+    /// Admins: save for everyone in the organisation.
+    #[serde(default)]
+    pub org: bool,
 }
+
+/// Org-wide templates are stored under this owner id.
+const ORG_OWNER: i64 = 0;
 
 /// Saved access policies.
 #[utoipa::path(get, path = "/policy-templates", tag = "templates", operation_id = "template_list",
     responses((status = 200, body = Vec<PolicyTemplate>)))]
 async fn list(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<PolicyTemplate>>> {
-    let rows: Vec<(String, String, String, i64)> =
-        sqlx::query_as("SELECT id, name, rules, created_at FROM policy_templates WHERE owner_id = ? ORDER BY name COLLATE NOCASE")
+    let rows: Vec<(String, String, String, i64, i64)> =
+        sqlx::query_as("SELECT id, name, rules, created_at, owner_id FROM policy_templates WHERE owner_id IN (?, 0) ORDER BY owner_id != 0, name COLLATE NOCASE")
             .bind(user.id)
             .fetch_all(&state.db)
             .await?;
     Ok(Json(
         rows.into_iter()
-            .filter_map(|(id, name, rules, created_at)| {
+            .filter_map(|(id, name, rules, created_at, owner)| {
                 serde_json::from_str(&rules).ok().map(|policy| PolicyTemplate {
                     id,
                     name,
                     policy,
                     created_at,
+                    org: owner == ORG_OWNER,
                 })
             })
             .collect(),
@@ -65,12 +74,26 @@ async fn save(
     user: CurrentUser,
     Json(req): Json<SaveTemplate>,
 ) -> AppResult<Json<PolicyTemplate>> {
-    user.can_share()?;
+    user.ensure_can_share(&state).await?;
     let name = req.name.trim().to_string();
     if name.is_empty() || name.chars().count() > 80 {
         return Err(AppError::BadRequest("template name must be 1-80 characters".into()));
     }
     let policy = validate_policy(&state, req.policy)?;
+    super::handlers::validate_references(&state, &policy).await?;
+    crate::org::settings::load(&state)
+        .await?
+        .enforce(&crate::org::settings::ShareParams {
+            enc_mode: None,
+            expires_at: None,
+            max_views: None,
+            policy: Some(&policy),
+            slug_generator: None,
+        })?;
+    if req.org && !user.is_admin() {
+        return Err(AppError::Forbidden("only admins can save organisation-wide policies".into()));
+    }
+    let owner = if req.org { ORG_OWNER } else { user.id };
     let rules = serde_json::to_string(&policy).map_err(anyhow::Error::from)?;
     let (id, created_at): (String, i64) = sqlx::query_as(
         "INSERT INTO policy_templates (id, owner_id, name, rules, created_at) VALUES (?, ?, ?, ?, ?)
@@ -78,7 +101,7 @@ async fn save(
          RETURNING id, created_at",
     )
     .bind(uuid::Uuid::new_v4().to_string())
-    .bind(user.id)
+    .bind(owner)
     .bind(&name)
     .bind(rules)
     .bind(now())
@@ -90,7 +113,8 @@ async fn save(
             user.event(Action::TemplateSaved)
                 .client(&client)
                 .target("template", &id, Some(name.clone()))
-                .detail("policy", &policy),
+                .detail("policy", &policy)
+                .detail("org", req.org),
         )
         .await?;
     Ok(Json(PolicyTemplate {
@@ -98,6 +122,7 @@ async fn save(
         name,
         policy,
         created_at,
+        org: req.org,
     }))
 }
 
@@ -105,9 +130,10 @@ async fn save(
 #[utoipa::path(delete, path = "/policy-templates/{id}", tag = "templates", operation_id = "template_delete", params(("id" = String, Path)),
     responses((status = 204), (status = 404, body = crate::error::ErrorBody)))]
 async fn delete(State(state): State<AppState>, client: ClientInfo, user: CurrentUser, Path(id): Path<String>) -> AppResult<StatusCode> {
-    let res = sqlx::query("DELETE FROM policy_templates WHERE id = ? AND owner_id = ?")
+    let res = sqlx::query("DELETE FROM policy_templates WHERE id = ? AND (owner_id = ? OR (owner_id = 0 AND ?))")
         .bind(&id)
         .bind(user.id)
+        .bind(user.is_admin())
         .execute(&state.db)
         .await?;
     if res.rows_affected() == 0 {

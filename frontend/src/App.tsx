@@ -7,6 +7,8 @@ import { Login } from './pages/Login'
 import { NewShare } from './pages/NewShare'
 import { Settings } from './pages/Settings'
 import { Audit } from './pages/Audit'
+import { Admin } from './pages/Admin'
+import { Invite } from './pages/Invite'
 import { ShareView } from './pages/ShareView'
 
 function Layout() {
@@ -35,6 +37,11 @@ function Layout() {
                 </span>
               )}
             </Link>
+            {me.data.mode === 'team' && me.data.user?.role === 'admin' && (
+              <Link to="/admin" className="btn btn-small btn-ghost">
+                Admin
+              </Link>
+            )}
             {(me.data.user?.role === 'admin' || me.data.user?.role === 'auditor') && (
               <Link to="/audit" className="btn btn-small btn-ghost">
                 Audit
@@ -57,7 +64,12 @@ function Layout() {
           </nav>
         )}
       </header>
-      <main className={loc.pathname.startsWith('/audit') ? 'container wide' : 'container'}>
+      {me.data?.authenticated && me.data.mfa_setup_required && !loc.pathname.startsWith('/settings') && (
+        <div className="note banner" role="status">
+          Your organisation requires a second factor. <Link to="/settings">Add a passkey or authenticator app</Link> before sharing.
+        </div>
+      )}
+      <main className={loc.pathname.startsWith('/audit') || loc.pathname.startsWith('/admin') ? 'container wide' : 'container'}>
         <Outlet />
       </main>
     </>
@@ -78,11 +90,13 @@ export default function App() {
       <Route element={<Layout />}>
         <Route path="/s/:slug" element={<ShareView />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/invite/:token" element={<Invite />} />
         <Route element={<RequireOwner />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/new" element={<NewShare />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/audit" element={<Audit />} />
+          <Route path="/admin" element={<Admin />} />
         </Route>
         <Route path="*" element={<p className="hint">Page not found.</p>} />
       </Route>

@@ -2,8 +2,9 @@
 # Every key can also be set via environment: SS_<KEY>, nested with "__"
 # (e.g. SS_BASE_URL, SS_PROXY__MODE, SS_PROXY__TRUSTED_PROXIES="172.30.0.0/24,127.0.0.1").
 
-# single: one owner (self-hosting for yourself). team: several users with roles (admin, member,
-# auditor). Team sign-up/invites and SSO arrive in a later release; until then use `admin init`.
+# single: one owner (self-hosting for yourself).
+# team: an organisation with members, groups and roles (admin, member, auditor). Create the first
+# admin with `sharesomething admin init --email you@company.com`, then invite people from Admin.
 mode = "single"
 
 bind = "0.0.0.0:8080"
@@ -71,6 +72,16 @@ smtp_password = ""
 # client_id = ""
 # client_secret = ""
 
+# Team mode: company SSO for members. Set member_login = true on a provider to show
+# "Sign in with <name>" on the login page. It can still be used for recipient sign-in too.
+# [[oidc]]
+# id = "entra"
+# name = "Microsoft Entra ID"
+# issuer = "https://login.microsoftonline.com/<tenant-id>/v2.0"
+# client_id = ""
+# client_secret = ""
+# member_login = true
+
 # [[oidc]]
 # id = "microsoft"
 # name = "Microsoft"
@@ -87,6 +98,14 @@ smtp_password = ""
 # kind = "github"             # OAuth app; uses the account's verified emails
 # client_id = ""
 # client_secret = ""
+
+# Team mode only.
+[team]
+# allowed_domains = ["company.com"]  # SSO sign-ins from these domains become members automatically
+#                                    # (empty = invited people only)
+# default_role = "member"            # role for auto-provisioned SSO members
+# local_accounts = true              # allow password accounts via invite links (false = SSO only)
+# invite_days = 7                    # how long invite links stay valid
 
 # Audit trail: hash-chained, tamper-evident, and optionally streamed to your SIEM.
 # Full guide with Splunk, Elastic, Sentinel/QRadar (CEF), syslog and webhook examples: docs/audit.md

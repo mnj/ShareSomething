@@ -65,15 +65,25 @@ impl CurrentUser {
         self.mfa_at.is_some_and(|t| now() - t <= MFA_FRESH_SECS)
     }
 
+    pub fn is_admin(&self) -> bool {
+        self.role == Role::Admin
+    }
+
     /// May read the audit trail.
     pub fn can_audit(&self) -> bool {
         matches!(self.role, Role::Admin | Role::Auditor)
     }
 
-    /// May create and manage shares (auditors are read-only).
-    pub fn can_share(&self) -> AppResult<()> {
+    /// May create and manage shares: not an auditor, and MFA set up if the org requires it.
+    pub async fn ensure_can_share(&self, state: &AppState) -> AppResult<()> {
         if self.role == Role::Auditor {
             return Err(AppError::Forbidden("auditors have read-only access".into()));
+        }
+        if mfa_setup_required(state, self.id).await? {
+            return Err(AppError::Access(
+                "mfa_setup_required",
+                "your organisation requires a passkey or authenticator app; set one up in Settings".into(),
+            ));
         }
         Ok(())
     }
@@ -85,7 +95,7 @@ impl CurrentUser {
 }
 
 #[derive(sqlx::FromRow)]
-pub(super) struct UserRow {
+pub(crate) struct UserRow {
     pub id: i64,
     pub email: Option<String>,
     pub name: String,
@@ -115,7 +125,7 @@ fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash).is_ok_and(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
 }
 
-pub(super) async fn load_user(state: &AppState, id: i64) -> AppResult<UserRow> {
+pub(crate) async fn load_user(state: &AppState, id: i64) -> AppResult<UserRow> {
     sqlx::query_as::<_, UserRow>(&format!("SELECT {USER_COLS} FROM users WHERE id = ?"))
         .bind(id)
         .fetch_optional(&state.db)
@@ -253,6 +263,21 @@ pub struct MeResponse {
     pub passkeys: i64,
     /// Unix time until which the last MFA (TOTP or passkey) satisfies "require owner MFA" shares.
     pub mfa_valid_until: Option<i64>,
+    /// The org requires MFA and this user hasn't set any up yet (sharing is blocked until they do).
+    pub mfa_setup_required: bool,
+}
+
+/// Org policy says members need MFA, and this user has neither TOTP nor a passkey. Accounts that
+/// sign in through SSO count as covered: their identity provider enforces MFA.
+pub async fn mfa_setup_required(state: &AppState, user_id: i64) -> AppResult<bool> {
+    if !crate::org::settings::load(state).await?.require_mfa {
+        return Ok(false);
+    }
+    let sso: (Option<String>,) = sqlx::query_as("SELECT sso_provider FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(sso.0.is_none() && !user_has_mfa(state, user_id).await?)
 }
 
 pub(super) async fn passkey_count(state: &AppState, user_id: i64) -> AppResult<i64> {
@@ -263,7 +288,7 @@ pub(super) async fn passkey_count(state: &AppState, user_id: i64) -> AppResult<i
         .0)
 }
 
-pub(super) async fn me_response(state: &AppState, user: Option<&CurrentUser>) -> AppResult<MeResponse> {
+pub(crate) async fn me_response(state: &AppState, user: Option<&CurrentUser>) -> AppResult<MeResponse> {
     let initialised = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM users")
         .fetch_one(&state.db)
         .await?
@@ -307,11 +332,15 @@ pub(super) async fn me_response(state: &AppState, user: Option<&CurrentUser>) ->
             None => 0,
         },
         mfa_valid_until: user.and_then(|o| o.mfa_at).map(|t| t + MFA_FRESH_SECS).filter(|t| *t > now()),
+        mfa_setup_required: match user {
+            Some(u) => mfa_setup_required(state, u.id).await?,
+            None => false,
+        },
     })
 }
 
 /// Creates a session for `user` and adds its cookie.
-pub(super) async fn start_session(
+pub(crate) async fn start_session(
     state: &AppState,
     jar: CookieJar,
     user: &UserRow,

@@ -4,6 +4,129 @@
  */
 
 export interface paths {
+    "/api/admin/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every share in the organisation: settings and status only, never content. */
+        get: operations["admin_shares_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/shares/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke any share (its content is destroyed immediately). */
+        post: operations["admin_shares_revoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All accounts. */
+        get: operations["admin_users_list"];
+        put?: never;
+        /**
+         * Invite someone. With local accounts they get a link to set a password; with SSO only they
+         *     simply sign in with their company account.
+         */
+        post: operations["admin_users_invite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change a user's role, name, or enable/disable the account. Disabling signs them out everywhere. */
+        patch: operations["admin_users_update"];
+        trace?: never;
+    };
+    "/api/admin/users/{id}/reinvite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue a fresh invite link (the old one stops working). */
+        post: operations["admin_users_reinvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/{id}/reset-mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove a user's TOTP and passkeys (e.g. lost device) and sign them out. */
+        post: operations["admin_users_reset_mfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/{id}/sign-out": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign a user out of every session. */
+        post: operations["admin_users_sign_out"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/approvals": {
         parameters: {
             query?: never;
@@ -310,6 +433,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/sso-providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Providers members can sign in with (team mode). */
+        get: operations["sso_providers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/step-up": {
         parameters: {
             query?: never;
@@ -378,6 +518,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/directory/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Active members, for picking people in access rules. */
+        get: operations["directory_users"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All groups (any signed-in user, for access rules). */
+        get: operations["groups_list"];
+        put?: never;
+        /** Create a group (admins). */
+        post: operations["groups_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/groups/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a group (admins). Shares that named it simply stop matching it. */
+        delete: operations["groups_delete"];
+        options?: never;
+        head?: never;
+        /** Rename or describe a group (admins). */
+        patch: operations["groups_update"];
+        trace?: never;
+    };
+    "/api/groups/{id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A group's member ids. */
+        get: operations["groups_members"];
+        /** Replace a group's members (admins). */
+        put: operations["groups_set_members"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/invites/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who an invite link is for (404 when invalid or expired). */
+        get: operations["invite_info"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/invites/{token}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept an invite: set a password, activate the account and sign in. */
+        post: operations["invite_accept"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/notifications": {
         parameters: {
             query?: never;
@@ -406,6 +651,24 @@ export interface paths {
         put?: never;
         /** Mark all your notifications as read. */
         post: operations["notifications_read"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/org/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Org policies (readable by everyone signed in, so the UI can explain limits). */
+        get: operations["org_settings_get"];
+        /** Replace org policies (admins). */
+        put: operations["org_settings_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -772,6 +1035,10 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcceptInvite: {
+            name?: string | null;
+            password: string;
+        };
         /** @description One line of a share's activity log (a view of the audit records targeting the share). */
         AccessLogEntry: {
             /** @description Audit action, e.g. `share.opened`. */
@@ -786,7 +1053,30 @@ export interface components {
             user_agent?: string | null;
         };
         /** @enum {string} */
-        AccessStatus: "ready" | "need_passphrase" | "need_owner_login" | "need_owner_mfa" | "need_auth" | "denied" | "not_yet";
+        AccessStatus: "ready" | "need_passphrase" | "need_owner_login" | "need_login" | "need_owner_mfa" | "need_auth" | "denied" | "not_yet";
+        AdminShare: {
+            owner: string;
+            /** Format: int64 */
+            owner_id: number;
+            share: components["schemas"]["ShareSummary"];
+        };
+        AdminUser: {
+            /** Format: int64 */
+            created_at: number;
+            email?: string | null;
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            last_login_at?: number | null;
+            name: string;
+            /** Format: int64 */
+            passkeys: number;
+            role: components["schemas"]["Role"];
+            sso_provider?: string | null;
+            /** @description active | invited | disabled */
+            status: string;
+            totp: boolean;
+        };
         AuditPage: {
             events: components["schemas"]["Record"][];
             /**
@@ -876,6 +1166,12 @@ export interface components {
         Decide: {
             approve: boolean;
         };
+        DirectoryUser: {
+            email?: string | null;
+            /** Format: int64 */
+            id: number;
+            name: string;
+        };
         EmailStartRequest: {
             email: string;
             /** @description The share being opened; a code is only sent if this email could get access to it. */
@@ -930,9 +1226,37 @@ export interface components {
             /** @description The slug text itself comes from the user (e.g. vanity slugs) rather than randomness. */
             user_supplied: boolean;
         };
+        Group: {
+            description: string;
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            members: number;
+            name: string;
+        };
+        GroupInput: {
+            description?: string;
+            name: string;
+        };
         IdentityInfo: {
             email: string;
             method: string;
+        };
+        InviteInfo: {
+            email: string;
+            name: string;
+        };
+        InviteRequest: {
+            email: string;
+            name?: string | null;
+            role: components["schemas"]["Role"];
+        };
+        InviteResult: {
+            /** @description Whether the invite was also emailed. */
+            emailed: boolean;
+            /** @description Link for the invitee to set a password (absent when local accounts are disabled: they use SSO). */
+            invite_url?: string | null;
+            user: components["schemas"]["AdminUser"];
         };
         LoginRequest: {
             /** @description Team mode: the account's email. Single mode: omit. */
@@ -948,6 +1272,8 @@ export interface components {
         MeResponse: {
             authenticated: boolean;
             initialised: boolean;
+            /** @description The org requires MFA and this user hasn't set any up yet (sharing is blocked until they do). */
+            mfa_setup_required: boolean;
             /**
              * Format: int64
              * @description Unix time until which the last MFA (TOTP or passkey) satisfies "require owner MFA" shares.
@@ -963,6 +1289,9 @@ export interface components {
             /** @description TOTP state of the signed-in user (single mode: of the owner, so the login form can ask for it). */
             totp_enabled: boolean;
             user?: null | components["schemas"]["UserInfo"];
+        };
+        Members: {
+            user_ids: number[];
         };
         Notification: {
             approval_id?: string | null;
@@ -1035,6 +1364,45 @@ export interface components {
             /** @enum {string} */
             type: "text";
         };
+        OrgSettings: {
+            /**
+             * @description Allow "anyone with the link" shares (otherwise every share needs an access rule).
+             * @default true
+             */
+            allow_public_shares: boolean;
+            /**
+             * @description Email domains that email/domain rules may name (empty = any).
+             * @default []
+             */
+            allowed_recipient_domains: string[];
+            /**
+             * @description Link styles members may use (empty = all enabled).
+             * @default []
+             */
+            allowed_slug_generators: string[];
+            /**
+             * @description Every share must be end-to-end encrypted.
+             * @default false
+             */
+            force_e2e: boolean;
+            /**
+             * Format: int64
+             * @description Longest allowed lifetime in days; when set, every share must expire.
+             * @default null
+             */
+            max_expiry_days: number | null;
+            /**
+             * Format: int64
+             * @description Highest allowed view limit; when set, every share must have one.
+             * @default null
+             */
+            max_views: number | null;
+            /**
+             * @description Users must set up a passkey or authenticator app before they can create shares.
+             * @default false
+             */
+            require_mfa: boolean;
+        };
         PasskeyInfo: {
             /** Format: int64 */
             created_at: number;
@@ -1064,6 +1432,8 @@ export interface components {
             created_at: number;
             id: string;
             name: string;
+            /** @description Shared with the whole organisation (managed by admins). */
+            org: boolean;
             policy: components["schemas"]["PolicyRule"][];
         };
         PreviewRequest: {
@@ -1138,11 +1508,24 @@ export interface components {
             methods?: string[];
             /** @enum {string} */
             type: "email_domain";
+        } | {
+            /** @enum {string} */
+            type: "member";
+        } | {
+            groups: number[];
+            /** @enum {string} */
+            type: "group";
+        } | {
+            /** @enum {string} */
+            type: "user";
+            users: number[];
         };
         /** @enum {string} */
         RuleGroup: "include" | "require" | "exclude";
         SaveTemplate: {
             name: string;
+            /** @description Admins: save for everyone in the organisation. */
+            org?: boolean;
             policy: components["schemas"]["PolicyRule"][];
         };
         /** @description What a visitor learns before opening a share. Details are hidden unless access is allowed. */
@@ -1282,6 +1665,10 @@ export interface components {
             /** Format: int64 */
             n: number;
         };
+        SsoProvider: {
+            id: string;
+            name: string;
+        };
         StepUpRequest: {
             totp: string;
         };
@@ -1340,6 +1727,12 @@ export interface components {
             notify_webhook?: string | null;
             role: components["schemas"]["Role"];
         };
+        UserUpdate: {
+            name?: string | null;
+            role?: null | components["schemas"]["Role"];
+            /** @description `active` or `disabled`. */
+            status?: string | null;
+        };
         VerifyReport: {
             /** Format: int64 */
             checked: number;
@@ -1364,6 +1757,196 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    admin_shares_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminShare"][];
+                };
+            };
+        };
+    };
+    admin_shares_revoke: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_users_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUser"][];
+                };
+            };
+        };
+    };
+    admin_users_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InviteRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteResult"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_users_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserUpdate"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUser"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_users_reinvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteResult"];
+                };
+            };
+        };
+    };
+    admin_users_reset_mfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUser"];
+                };
+            };
+        };
+    };
+    admin_users_sign_out: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     approvals_list: {
         parameters: {
             query?: never;
@@ -1885,6 +2468,25 @@ export interface operations {
             };
         };
     };
+    sso_providers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SsoProvider"][];
+                };
+            };
+        };
+    };
     step_up: {
         parameters: {
             query?: never;
@@ -2001,6 +2603,227 @@ export interface operations {
             };
         };
     };
+    directory_users: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectoryUser"][];
+                };
+            };
+        };
+    };
+    groups_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Group"][];
+                };
+            };
+        };
+    };
+    groups_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupInput"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Group"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    groups_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    groups_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupInput"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Group"];
+                };
+            };
+        };
+    };
+    groups_members: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Members"];
+                };
+            };
+        };
+    };
+    groups_set_members: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Members"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Group"];
+                };
+            };
+        };
+    };
+    invite_info: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteInfo"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    invite_accept: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptInvite"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     notifications_list: {
         parameters: {
             query?: {
@@ -2038,6 +2861,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NotificationList"];
+                };
+            };
+        };
+    };
+    org_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+        };
+    };
+    org_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrgSettings"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
         };
@@ -2267,6 +3140,8 @@ export interface operations {
             query?: {
                 /** @description Path to return to after signing in, e.g. `/s/my-share`. */
                 next?: string | null;
+                /** @description `member`: sign in to your ShareSomething account (team SSO). Default: verify a recipient. */
+                purpose?: string | null;
             };
             header?: never;
             path: {

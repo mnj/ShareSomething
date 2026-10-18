@@ -196,6 +196,12 @@ function Gate({ info, fragmentKey, splitPart, onRevealed }: { info: ShareInfo; f
           This share can only be opened by its owner. <Link to={`/login?next=${next}`}>Sign in</Link>
         </Notice>
       )
+    case 'need_login':
+      return (
+        <Notice title="Sign in to open">
+          This share is for members of the organisation. <Link to={`/login?next=${next}`}>Sign in</Link>
+        </Notice>
+      )
     case 'need_owner_mfa':
       return (
         <section className="card stack narrow">

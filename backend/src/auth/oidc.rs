@@ -133,6 +133,8 @@ fn state_cookie(state: &AppState, value: String, max_age: i64) -> Cookie<'static
 struct StartQuery {
     /// Path to return to after signing in, e.g. `/s/my-share`.
     next: Option<String>,
+    /// `member`: sign in to your ShareSomething account (team SSO). Default: verify a recipient.
+    purpose: Option<String>,
 }
 
 /// Start signing in with a provider (redirects to it).
@@ -145,6 +147,10 @@ async fn start(
     jar: CookieJar,
 ) -> AppResult<Response> {
     let p = state.oidc.get(&provider)?;
+    let member = q.purpose.as_deref() == Some("member");
+    if member && !(p.cfg.member_login && state.cfg.mode == crate::config::InstanceMode::Team) {
+        return Err(AppError::NotFound);
+    }
     let csrf = random_token();
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let nonce = random_token();
@@ -194,15 +200,18 @@ async fn start(
         }
     };
 
-    sqlx::query("INSERT INTO oidc_states (state_hash, provider, pkce_verifier, nonce, next, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(sha256(csrf.as_bytes()))
-        .bind(&provider)
-        .bind(pkce_verifier.secret())
-        .bind(&nonce)
-        .bind(safe_next(q.next.as_deref()))
-        .bind(now() + STATE_TTL_SECS)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "INSERT INTO oidc_states (state_hash, provider, pkce_verifier, nonce, next, expires_at, purpose) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(sha256(csrf.as_bytes()))
+    .bind(&provider)
+    .bind(pkce_verifier.secret())
+    .bind(&nonce)
+    .bind(safe_next(q.next.as_deref()))
+    .bind(now() + STATE_TTL_SECS)
+    .bind(if member { "member" } else { "recipient" })
+    .execute(&state.db)
+    .await?;
     Ok((jar.add(state_cookie(&state, csrf, STATE_TTL_SECS)), Redirect::to(&auth_url)).into_response())
 }
 
@@ -235,8 +244,8 @@ async fn callback(
         .get(STATE_COOKIE)
         .is_some_and(|c| bool::from(c.value().as_bytes().ct_eq(given.as_bytes())));
     let jar = jar.remove(state_cookie(&state, String::new(), 0));
-    let row: Option<(String, String, String)> = sqlx::query_as(
-        "DELETE FROM oidc_states WHERE state_hash = ? AND provider = ? AND expires_at > ? RETURNING pkce_verifier, nonce, next",
+    let row: Option<(String, String, String, String)> = sqlx::query_as(
+        "DELETE FROM oidc_states WHERE state_hash = ? AND provider = ? AND expires_at > ? RETURNING pkce_verifier, nonce, next, purpose",
     )
     .bind(sha256(given.as_bytes()))
     .bind(&provider)
@@ -252,7 +261,7 @@ async fn callback(
             .detail("method", &method)
             .detail("reason", reason)
     };
-    let Some((verifier, nonce, next)) = row.filter(|_| cookie_ok && !given.is_empty()) else {
+    let Some((verifier, nonce, next, purpose)) = row.filter(|_| cookie_ok && !given.is_empty()) else {
         state
             .audit
             .record(failed(if cookie_ok {
@@ -274,6 +283,9 @@ async fn callback(
         OidcKind::Oidc => oidc_emails(&state, p, &provider, code, verifier, nonce).await,
         OidcKind::Github => github_emails(&state, p, &provider, code, verifier).await,
     };
+    if purpose == "member" {
+        return member_sign_in(&state, &client, jar, &provider, emails, &next).await;
+    }
     match emails {
         Ok(emails) if !emails.is_empty() => {
             let jar = add_identities(&state, jar, &recipient, &emails, &method).await?;
@@ -392,5 +404,148 @@ async fn github_emails(state: &AppState, p: &Provider, provider: &str, code: Str
 }
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(start)).routes(routes!(callback))
+    OpenApiRouter::new()
+        .routes(routes!(start))
+        .routes(routes!(callback))
+        .routes(routes!(sso_providers))
+}
+
+/// Team SSO: sign in to an existing account, activate an invited one, or provision a member when
+/// the verified email is in `team.allowed_domains`.
+async fn member_sign_in(
+    state: &AppState,
+    client: &ClientInfo,
+    jar: CookieJar,
+    provider: &str,
+    emails: anyhow::Result<Vec<String>>,
+    next: &str,
+) -> AppResult<Response> {
+    let method = format!("sso:{provider}");
+    let fail = |reason: &'static str, email: Option<String>| {
+        let e = Event::new(Action::AuthLoginFailed)
+            .denied()
+            .recipient(email)
+            .client(client)
+            .detail("method", &method)
+            .detail("reason", reason);
+        (e, format!("/login?sso_error={reason}"))
+    };
+    let emails = match emails {
+        Ok(e) if !e.is_empty() => e,
+        Ok(_) => {
+            let (e, to) = fail("no_verified_email", None);
+            state.audit.record(e).await?;
+            return Ok((jar, Redirect::to(&to)).into_response());
+        }
+        Err(err) => {
+            tracing::warn!(provider, error = %err, "SSO sign-in failed");
+            let (e, to) = fail("provider_error", None);
+            state.audit.record(e.detail("error", err.to_string())).await?;
+            return Ok((jar, Redirect::to(&to)).into_response());
+        }
+    };
+    let mut found: Option<(i64, String)> = None;
+    for email in &emails {
+        if let Some(row) = sqlx::query_as::<_, (i64, String)>("SELECT id, status FROM users WHERE email = ?")
+            .bind(email)
+            .fetch_optional(&state.db)
+            .await?
+        {
+            found = Some(row);
+            break;
+        }
+    }
+    let email = emails[0].clone();
+    let id = match found {
+        Some((_, status)) if status == "disabled" => {
+            let (e, to) = fail("account_disabled", Some(email));
+            state.audit.record(e).await?;
+            return Ok((jar, Redirect::to(&to)).into_response());
+        }
+        Some((id, status)) => {
+            if status == "invited" {
+                sqlx::query(
+                    "UPDATE users SET status = 'active', invite_token_hash = NULL, invite_expires_at = NULL, sso_provider = ? WHERE id = ?",
+                )
+                .bind(provider)
+                .bind(id)
+                .execute(&state.db)
+                .await?;
+                state
+                    .audit
+                    .record(
+                        Event::new(Action::UserInviteAccepted)
+                            .user(id, &email)
+                            .client(client)
+                            .detail("method", &method),
+                    )
+                    .await?;
+            }
+            id
+        }
+        None => {
+            let domain_ok = emails.iter().find(|e| {
+                e.rsplit_once('@')
+                    .is_some_and(|(_, d)| state.cfg.team.allowed_domains.iter().any(|a| a.eq_ignore_ascii_case(d)))
+            });
+            let Some(email) = domain_ok.cloned() else {
+                let (e, to) = fail("not_a_member", Some(email));
+                state.audit.record(e).await?;
+                return Ok((jar, Redirect::to(&to)).into_response());
+            };
+            let name = email.split('@').next().unwrap_or("").to_string();
+            let (id,): (i64,) = sqlx::query_as(
+                "INSERT INTO users (email, name, role, status, sso_provider, created_at) VALUES (?, ?, ?, 'active', ?, ?) RETURNING id",
+            )
+            .bind(&email)
+            .bind(&name)
+            .bind(&state.cfg.team.default_role)
+            .bind(provider)
+            .bind(now())
+            .fetch_one(&state.db)
+            .await?;
+            state
+                .audit
+                .record(
+                    Event::new(Action::UserCreated)
+                        .system("sso")
+                        .client(client)
+                        .target("user", id.to_string(), Some(email.clone()))
+                        .detail("method", &method)
+                        .detail("role", &state.cfg.team.default_role),
+                )
+                .await?;
+            id
+        }
+    };
+    let user = super::users::load_user(state, id).await?;
+    let (jar, session) = super::users::start_session(state, jar, &user, None).await?;
+    state
+        .audit
+        .record(session.event(Action::AuthLogin).client(client).detail("method", &method))
+        .await?;
+    Ok((jar, Redirect::to(next)).into_response())
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct SsoProvider {
+    pub id: String,
+    pub name: String,
+}
+
+/// Providers members can sign in with (team mode).
+#[utoipa::path(get, path = "/auth/sso-providers", tag = "auth", operation_id = "sso_providers", responses((status = 200, body = Vec<SsoProvider>)))]
+async fn sso_providers(State(state): State<AppState>) -> axum::Json<Vec<SsoProvider>> {
+    let team = state.cfg.mode == crate::config::InstanceMode::Team;
+    axum::Json(
+        state
+            .oidc
+            .providers()
+            .filter(|p| team && p.member_login)
+            .map(|p| SsoProvider {
+                id: p.id.clone(),
+                name: p.name.clone(),
+            })
+            .collect(),
+    )
 }

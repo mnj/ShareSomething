@@ -50,6 +50,12 @@ pub enum Rule {
         #[serde(default)]
         methods: Vec<String>,
     },
+    /// Any signed-in user of this ShareSomething (team members).
+    Member,
+    /// Signed-in members of any of these groups (group ids).
+    Group { groups: Vec<i64> },
+    /// These signed-in users (user ids).
+    User { users: Vec<i64> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -68,6 +74,9 @@ impl Rule {
             Rule::Country { .. } => "country",
             Rule::Email { .. } => "email",
             Rule::EmailDomain { .. } => "email_domain",
+            Rule::Member => "member",
+            Rule::Group { .. } => "group",
+            Rule::User { .. } => "user",
         }
     }
 
@@ -92,7 +101,19 @@ impl Rule {
                 .collect()
         }
         Ok(match self {
-            Rule::Everyone | Rule::Owner => self,
+            Rule::Everyone | Rule::Owner | Rule::Member => self,
+            Rule::Group { mut groups } => {
+                non_empty(&groups, "groups")?;
+                groups.sort_unstable();
+                groups.dedup();
+                Rule::Group { groups }
+            }
+            Rule::User { mut users } => {
+                non_empty(&users, "users")?;
+                users.sort_unstable();
+                users.dedup();
+                Rule::User { users }
+            }
             Rule::Ip { cidrs } => {
                 non_empty(&cidrs, "cidrs")?;
                 let cidrs = cidrs
@@ -168,6 +189,8 @@ pub struct Identity {
 pub struct UserCtx {
     pub id: i64,
     pub mfa_at: Option<i64>,
+    /// Groups the user belongs to.
+    pub groups: Vec<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +224,8 @@ pub enum Decision {
     Unavailable,
     Denied,
     NeedOwnerLogin,
+    /// Sign in with your ShareSomething account (team member rules).
+    NeedUserLogin,
     NeedOwnerMfa,
     /// Allowed, but time-locked until this unix time.
     NotYet(i64),
@@ -237,6 +262,14 @@ fn rule_match(rule: &Rule, ctx: &AccessContext, owner_id: i64) -> Match {
             Some(_) => Match::No,
             None => Match::NeedsAuth(vec!["owner".into()]),
         },
+        Rule::Member | Rule::Group { .. } | Rule::User { .. } => match &ctx.user {
+            None => Match::NeedsAuth(vec!["member".into()]),
+            Some(u) => yes(match rule {
+                Rule::Group { groups } => groups.iter().any(|g| u.groups.contains(g)),
+                Rule::User { users } => users.contains(&u.id),
+                _ => true,
+            }),
+        },
         Rule::Ip { cidrs } => yes(cidrs.iter().filter_map(|c| parse_net(c).ok()).any(|n| n.contains(&ctx.ip))),
         Rule::Country { countries } => yes(ctx.country.as_ref().is_some_and(|c| countries.contains(c))),
         Rule::Email { emails, methods } => identity_match(ctx, methods, |e| emails.iter().any(|x| x == e)),
@@ -250,6 +283,9 @@ fn rule_match(rule: &Rule, ctx: &AccessContext, owner_id: i64) -> Match {
 fn need_auth(methods: Vec<Vec<String>>) -> Decision {
     if methods.iter().any(|m| m.iter().any(|x| x == "owner")) {
         return Decision::NeedOwnerLogin;
+    }
+    if methods.iter().any(|m| m.iter().any(|x| x == "member")) {
+        return Decision::NeedUserLogin;
     }
     let mut all: Vec<String> = Vec::new();
     for m in methods {
@@ -408,6 +444,7 @@ mod tests {
         c.user = Some(UserCtx {
             id: 1,
             mfa_at: mfa_ago.map(|a| NOW - a),
+            groups: vec![],
         });
         c
     }
@@ -416,7 +453,11 @@ mod tests {
     fn owner_rule_is_the_shares_owner_not_any_user() {
         let mut s = share(vec![inc(Rule::Owner)]);
         let mut other = anon("1.1.1.1");
-        other.user = Some(UserCtx { id: 2, mfa_at: Some(NOW) });
+        other.user = Some(UserCtx {
+            id: 2,
+            mfa_at: Some(NOW),
+            groups: vec![],
+        });
         assert_eq!(evaluate(&s, &other), Decision::Denied);
         s.rules = vec![inc(Rule::Everyone)];
         s.require_owner_mfa = true;
@@ -436,6 +477,40 @@ mod tests {
         assert_eq!(evaluate(&s, &anon("10.0.0.1")), Decision::NotYet(NOW + 60));
         s.available_from = Some(NOW);
         assert_eq!(evaluate(&s, &anon("10.0.0.1")), Decision::Allow);
+    }
+
+    #[test]
+    fn team_rules() {
+        let mut c = anon("1.1.1.1");
+        let s = share(vec![inc(Rule::Group { groups: vec![7] }), inc(Rule::User { users: vec![9] })]);
+        assert_eq!(evaluate(&s, &c), Decision::NeedUserLogin);
+        c.user = Some(UserCtx {
+            id: 3,
+            mfa_at: None,
+            groups: vec![7],
+        });
+        assert_eq!(evaluate(&s, &c), Decision::Allow, "group member");
+        c.user = Some(UserCtx {
+            id: 9,
+            mfa_at: None,
+            groups: vec![],
+        });
+        assert_eq!(evaluate(&s, &c), Decision::Allow, "named user");
+        c.user = Some(UserCtx {
+            id: 4,
+            mfa_at: None,
+            groups: vec![8],
+        });
+        assert_eq!(evaluate(&s, &c), Decision::Denied, "other member");
+        let any = share(vec![inc(Rule::Member), req(ip_rule("10.0.0.0/8"))]);
+        let mut m = anon("10.1.1.1");
+        m.user = Some(UserCtx {
+            id: 4,
+            mfa_at: None,
+            groups: vec![],
+        });
+        assert_eq!(evaluate(&any, &m), Decision::Allow);
+        assert!(Rule::Group { groups: vec![] }.normalise().is_err());
     }
 
     #[test]

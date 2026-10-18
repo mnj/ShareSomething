@@ -22,7 +22,13 @@ export function formatRelative(unix: number): string {
   return diff > 0 ? 'in under a minute' : 'just now'
 }
 
-export function describeRule(r: PolicyRule): string {
+/** Optional id -> name lookups for group/user rules. */
+export interface RuleNames {
+  groups?: Map<number, string>
+  users?: Map<number, string>
+}
+
+export function describeRule(r: PolicyRule, names?: RuleNames): string {
   switch (r.type) {
     case 'everyone':
       return 'anyone with the link'
@@ -36,14 +42,21 @@ export function describeRule(r: PolicyRule): string {
       return `email ${r.emails.join(', ')}`
     case 'email_domain':
       return `@${r.domains.join(', @')}`
+    case 'member':
+      return 'any team member'
+    case 'group':
+      return `group ${r.groups.map((g) => names?.groups?.get(g) ?? `#${g}`).join(', ')}`
+    case 'user':
+      return r.users.map((u) => names?.users?.get(u) ?? `user #${u}`).join(', ')
   }
 }
 
-export function describePolicy(policy: PolicyRule[]): string {
+export function describePolicy(policy: PolicyRule[], names?: RuleNames): string {
   const parts: string[] = []
-  const inc = policy.filter((r) => r.group === 'include').map(describeRule)
-  const req = policy.filter((r) => r.group === 'require').map(describeRule)
-  const exc = policy.filter((r) => r.group === 'exclude').map(describeRule)
+  const d = (r: PolicyRule) => describeRule(r, names)
+  const inc = policy.filter((r) => r.group === 'include').map(d)
+  const req = policy.filter((r) => r.group === 'require').map(d)
+  const exc = policy.filter((r) => r.group === 'exclude').map(d)
   if (inc.length) parts.push(inc.join(' or '))
   if (req.length) parts.push(`must match ${req.join(' and ')}`)
   if (exc.length) parts.push(`except ${exc.join(', ')}`)

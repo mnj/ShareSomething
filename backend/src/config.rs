@@ -41,6 +41,7 @@ pub struct Config {
     /// How long a recipient stays signed in (email code / OIDC).
     pub recipient_session_hours: i64,
     pub audit: AuditConfig,
+    pub team: TeamConfig,
     pub proxy: ProxyConfig,
     pub slugs: SlugConfig,
     pub email: EmailConfig,
@@ -96,6 +97,9 @@ pub struct OidcProviderConfig {
     pub client_secret: String,
     #[serde(default)]
     pub scopes: Vec<String>,
+    /// Team mode: members may sign in to their account with this provider (company SSO).
+    #[serde(default)]
+    pub member_login: bool,
     /// Accept an email the provider doesn't mark as verified (some Microsoft tenants omit
     /// `email_verified`). Only enable for providers you trust to control email addresses.
     #[serde(default)]
@@ -135,6 +139,31 @@ pub enum InstanceMode {
     #[default]
     Single,
     Team,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TeamConfig {
+    /// Email domains whose SSO sign-ins become members automatically (empty = invite only).
+    #[serde(deserialize_with = "list_or_csv")]
+    pub allowed_domains: Vec<String>,
+    /// Role for auto-provisioned SSO members.
+    pub default_role: String,
+    /// Allow password accounts (invites). With SSO only, set this to false.
+    pub local_accounts: bool,
+    /// How long an invite link stays valid.
+    pub invite_days: i64,
+}
+
+impl Default for TeamConfig {
+    fn default() -> Self {
+        Self {
+            allowed_domains: vec![],
+            default_role: "member".into(),
+            local_accounts: true,
+            invite_days: 7,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -197,6 +226,7 @@ impl Default for Config {
             recipient_session_hours: 12,
             mode: InstanceMode::Single,
             audit: AuditConfig::default(),
+            team: TeamConfig::default(),
             proxy: ProxyConfig::default(),
             slugs: SlugConfig::default(),
             email: EmailConfig::default(),
@@ -277,6 +307,9 @@ impl Config {
             if s.name.is_empty() || !names.insert(s.name.clone()) {
                 bail!("audit shipper names must be unique and non-empty ('{}')", s.name);
             }
+        }
+        if !matches!(self.team.default_role.as_str(), "member" | "auditor") {
+            bail!("team.default_role must be member or auditor");
         }
         if self.audit.retention_days.is_some_and(|d| d < 1) {
             bail!("audit.retention_days must be at least 1");

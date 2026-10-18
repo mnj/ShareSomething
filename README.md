@@ -38,7 +38,7 @@ Most "secret sharing" tools use one setting for everything. ShareSomething lets 
 
 **Access policies**, modelled on Cloudflare Access
 - *Allow if* (any matches), *Require* (all must match) and *Block if* rules.
-- Rule types: everyone, owner, IP/CIDR, country, email address and email domain.
+- Rule types: everyone, owner, IP/CIDR, country, email address and email domain (plus team member, group and person in team mode).
 - **Recipient sign-in:** an emailed one-time code, OIDC (Google, Microsoft, Keycloak,
   Authentik, ...) or GitHub. A rule can insist on a specific method.
 - **Owner MFA per share:** require a fresh passkey or authenticator code to open a share.
@@ -51,6 +51,18 @@ Most "secret sharing" tools use one setting for everything. ShareSomething lets 
 - **Split key (k-of-n):** the key is split between key holders in the browser (Shamir). Any k of
   them together can open it, and neither one person alone nor the server can.
 - **Notify on open:** know when (and from where) a share was opened.
+
+**Teams** (`mode = "team"`; single-owner self-hosting stays the default)
+- Invite people by link or email, or let them sign in with **company SSO** (OIDC; auto-provisioning
+  for your domains). Roles: admin, member and a read-only **auditor**.
+- **Groups** and new rule types: *any team member*, *these groups*, *these people*. Colleagues open
+  shares with their account, no email code needed.
+- **Org policies** enforced by the server: require MFA, force end-to-end encryption, forbid public
+  links, cap lifetime and views, restrict recipient domains and link styles.
+- **Admin console:** users (roles, disable, reset MFA, sign out everywhere), groups, org-wide
+  saved policies and an all-shares view with revoke. Admins see metadata, never content.
+- **Full audit trail for security teams:** hash-chained, exportable, and shipped live to Splunk,
+  Elastic, Sentinel, QRadar or any syslog/webhook SIEM ([docs/audit.md](docs/audit.md)).
 
 **Content types**
 - Text, links, multi-field credentials (secret fields masked) and files.
@@ -139,6 +151,7 @@ The important ones:
 | `SS_PROXY__TRUSTED_PROXIES` | CIDRs allowed to set those headers, e.g. the tunnel's Docker network |
 | `SS_MASTER_KEY` | Base64 32-byte key for server-side encryption (otherwise generated in `/data/master.key`) |
 | `SS_EMAIL__MODE` | `disabled`, `log` (development) or `smtp`, plus `SS_EMAIL__SMTP_HOST`, `..._USERNAME`, `..._PASSWORD`, `SS_EMAIL__FROM` |
+| `SS_MODE` | `single` (default) or `team`. Team settings live under `SS_TEAM__*` (`ALLOWED_DOMAINS`, `DEFAULT_ROLE`, `LOCAL_ACCOUNTS`, `INVITE_DAYS`) |
 | `SS_OIDC` | Sign-in providers, e.g. `[{id="google",name="Google",issuer="https://accounts.google.com",client_id="…",client_secret="…"}]` |
 
 For each OIDC or GitHub provider, register `<SS_BASE_URL>/api/recipient/oidc/<id>/callback` as the
