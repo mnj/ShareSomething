@@ -33,6 +33,7 @@ pub struct ShareRow {
     pub upload_dek: Option<Vec<u8>>,
     pub upload_token_hash: Option<Vec<u8>>,
     pub redirect_secs: Option<i64>,
+    pub owner_id: i64,
 }
 
 impl ShareRow {
@@ -69,6 +70,7 @@ impl ShareRow {
             max_views: self.max_views,
             views: self.views,
             require_owner_mfa: self.require_owner_mfa,
+            owner_id: self.owner_id,
             rules,
         }
     }
@@ -88,8 +90,11 @@ pub async fn by_id(db: impl SqliteExecutor<'_>, id: &str) -> sqlx::Result<Option
         .await
 }
 
-pub async fn list(db: impl SqliteExecutor<'_>) -> sqlx::Result<Vec<ShareRow>> {
-    sqlx::query_as("SELECT * FROM shares ORDER BY created_at DESC").fetch_all(db).await
+pub async fn list_owned(db: impl SqliteExecutor<'_>, owner_id: i64) -> sqlx::Result<Vec<ShareRow>> {
+    sqlx::query_as("SELECT * FROM shares WHERE owner_id = ? ORDER BY created_at DESC")
+        .bind(owner_id)
+        .fetch_all(db)
+        .await
 }
 
 fn decode_rule(group: RuleGroup, value: &str) -> Option<PolicyRule> {
@@ -201,24 +206,16 @@ pub enum Wipe {
     Revoked,
 }
 
-pub async fn log_access(
-    db: impl SqliteExecutor<'_>,
-    share_id: &str,
-    client: &crate::net::client_ip::ClientInfo,
-    identity: Option<&str>,
-    outcome: &str,
-) {
-    let res = sqlx::query("INSERT INTO access_log (share_id, ts, ip, country, identity, user_agent, outcome) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .bind(share_id)
-        .bind(now())
-        .bind(client.ip.to_string())
-        .bind(&client.country)
-        .bind(identity)
-        .bind(&client.user_agent)
-        .bind(outcome)
-        .execute(db)
-        .await;
-    if let Err(e) = res {
-        tracing::error!(error = %e, "failed to write access log");
+impl ShareRow {
+    /// Label used for this share in the audit trail (its title, else its link).
+    pub fn audit_label(&self) -> String {
+        self.title.clone().unwrap_or_else(|| format!("/s/{}", self.slug))
+    }
+
+    /// An audit event about this share.
+    pub fn event(&self, action: crate::audit::Action) -> crate::audit::Event {
+        crate::audit::Event::new(action)
+            .target("share", &self.id, Some(self.audit_label()))
+            .detail("owner_id", self.owner_id)
     }
 }

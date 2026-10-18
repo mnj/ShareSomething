@@ -12,7 +12,7 @@ use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 
-use crate::{app::AppState, auth, error::AppError, shares, static_files};
+use crate::{app::AppState, audit, auth, error::AppError, shares, static_files};
 
 #[derive(OpenApi)]
 #[openapi(info(title = "ShareSomething API", version = "0.1.0"))]
@@ -21,13 +21,14 @@ struct ApiDoc;
 pub fn api_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi()).nest(
         "/api",
-        auth::owner::router()
+        auth::users::router()
             .merge(auth::passkey::router())
             .merge(auth::recipient::router())
             .merge(auth::oidc::router())
             .merge(shares::handlers::router())
             .merge(shares::files::router())
-            .merge(shares::templates::router()),
+            .merge(shares::templates::router())
+            .merge(audit::api::router()),
     )
 }
 

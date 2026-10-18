@@ -3,6 +3,7 @@ use std::{ops::Deref, sync::Arc};
 use sqlx::SqlitePool;
 
 use crate::{
+    audit::{Audit, format::Observer},
     auth::{oidc::OidcProviders, passkey::Passkeys},
     blobs::Blobs,
     config::Config,
@@ -26,6 +27,7 @@ pub struct Inner {
     pub mailer: Mailer,
     pub oidc: OidcProviders,
     pub passkeys: Passkeys,
+    pub audit: Arc<Audit>,
 }
 
 impl Deref for AppState {
@@ -42,6 +44,7 @@ impl AppState {
         let mailer = Mailer::from_config(&cfg.email)?;
         let oidc = OidcProviders::new(&cfg.oidc)?;
         let passkeys = Passkeys::new(&cfg);
+        let audit = Arc::new(Audit::new(db.clone()));
         let proxy = ProxySettings {
             mode: cfg.proxy.mode,
             trusted: cfg.trusted_proxies()?,
@@ -57,12 +60,21 @@ impl AppState {
             mailer,
             oidc,
             passkeys,
+            audit,
         })))
     }
 
     #[cfg(test)]
     pub fn set_mailer(&mut self, mailer: crate::mailer::Mailer) {
         Arc::get_mut(&mut self.0).expect("state not shared yet").mailer = mailer;
+    }
+
+    /// How this instance identifies itself in shipped audit events.
+    pub fn observer(&self) -> Observer {
+        Observer {
+            hostname: self.cfg.audit_hostname(),
+            version: env!("CARGO_PKG_VERSION"),
+        }
     }
 
     pub fn share_url(&self, slug: &str) -> String {

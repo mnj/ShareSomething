@@ -1,6 +1,7 @@
 mod admin;
 mod api;
 mod app;
+mod audit;
 mod auth;
 mod blobs;
 mod config;
@@ -39,15 +40,26 @@ struct Cli {
 enum Cmd {
     /// Run the server (default).
     Serve,
-    /// Manage the owner account.
+    /// Manage the owner account (single mode) or bootstrap the first admin.
     Admin {
         #[command(subcommand)]
         cmd: admin::AdminCmd,
     },
     /// Print the OpenAPI document (used to generate frontend types).
     Openapi,
+    /// Audit trail tools.
+    Audit {
+        #[command(subcommand)]
+        cmd: AuditCmd,
+    },
     /// Exit 0 if the local server answers /healthz (for container HEALTHCHECK; no curl needed).
     Healthcheck,
+}
+
+#[derive(Subcommand)]
+enum AuditCmd {
+    /// Re-compute the audit hash chain; exits non-zero if it was tampered with.
+    Verify,
 }
 
 #[tokio::main]
@@ -60,6 +72,14 @@ async fn main() -> anyhow::Result<()> {
     match cli.cmd.unwrap_or(Cmd::Serve) {
         Cmd::Openapi => {
             println!("{}", api::openapi_json());
+            Ok(())
+        }
+        Cmd::Audit { cmd: AuditCmd::Verify } => {
+            let cfg = Config::load(cli.config.as_deref())?;
+            let db = db::connect(&cfg.data_dir).await?;
+            let r = audit::verify(&db).await?;
+            println!("{}", serde_json::to_string_pretty(&r)?);
+            anyhow::ensure!(r.ok, "audit chain is broken at seq {:?}", r.first_bad_seq);
             Ok(())
         }
         Cmd::Admin { cmd } => {
@@ -94,9 +114,25 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
     let master = MasterKey::new(cfg.master_key()?);
     let bind = cfg.bind;
     let state = AppState::new(cfg, db, master)?;
-    if sqlx::query("SELECT 1 FROM owner").fetch_optional(&state.db).await?.is_none() {
-        tracing::warn!("no owner account yet: run `sharesomething admin init`");
+    if sqlx::query("SELECT 1 FROM users").fetch_optional(&state.db).await?.is_none() {
+        tracing::warn!("no account yet: run `sharesomething admin init`");
     }
+    state.audit.import_legacy_access_log().await?;
+    state
+        .audit
+        .record(
+            audit::Event::new(audit::Action::SystemStarted)
+                .detail("version", env!("CARGO_PKG_VERSION"))
+                .detail("mode", state.cfg.mode)
+                .detail("shippers", state.cfg.audit.shippers.iter().map(|s| &s.name).collect::<Vec<_>>()),
+        )
+        .await?;
+    audit::ship::spawn_all(
+        state.audit.clone(),
+        state.db.clone(),
+        state.cfg.audit.shippers.clone(),
+        state.observer(),
+    );
     jobs::spawn_sweeper(state.clone());
     let app = api::router(state.clone());
     let listener = tokio::net::TcpListener::bind(bind).await?;

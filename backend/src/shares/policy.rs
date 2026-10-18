@@ -163,8 +163,10 @@ pub struct Identity {
     pub method: String,
 }
 
+/// The signed-in user of the request, if any.
 #[derive(Debug, Clone, Default)]
-pub struct OwnerCtx {
+pub struct UserCtx {
+    pub id: i64,
     pub mfa_at: Option<i64>,
 }
 
@@ -173,7 +175,7 @@ pub struct AccessContext {
     pub now: i64,
     pub ip: IpAddr,
     pub country: Option<String>,
-    pub owner: Option<OwnerCtx>,
+    pub user: Option<UserCtx>,
     pub identities: Vec<Identity>,
 }
 
@@ -185,6 +187,8 @@ pub struct ShareState {
     pub max_views: Option<i64>,
     pub views: i64,
     pub require_owner_mfa: bool,
+    /// The user who owns the share; the `owner` rule and owner MFA refer to them.
+    pub owner_id: i64,
     pub rules: Vec<PolicyRule>,
 }
 
@@ -219,17 +223,16 @@ fn identity_match(ctx: &AccessContext, methods: &[String], pred: impl Fn(&str) -
     }
 }
 
-fn rule_match(rule: &Rule, ctx: &AccessContext) -> Match {
+fn rule_match(rule: &Rule, ctx: &AccessContext, owner_id: i64) -> Match {
     let yes = |b: bool| if b { Match::Yes } else { Match::No };
     match rule {
         Rule::Everyone => Match::Yes,
-        Rule::Owner => {
-            if ctx.owner.is_some() {
-                Match::Yes
-            } else {
-                Match::NeedsAuth(vec!["owner".into()])
-            }
-        }
+        Rule::Owner => match &ctx.user {
+            Some(u) if u.id == owner_id => Match::Yes,
+            // Signed in, but as someone else: this rule can never match for them.
+            Some(_) => Match::No,
+            None => Match::NeedsAuth(vec!["owner".into()]),
+        },
         Rule::Ip { cidrs } => yes(cidrs.iter().filter_map(|c| parse_net(c).ok()).any(|n| n.contains(&ctx.ip))),
         Rule::Country { countries } => yes(ctx.country.as_ref().is_some_and(|c| countries.contains(c))),
         Rule::Email { emails, methods } => identity_match(ctx, methods, |e| emails.iter().any(|x| x == e)),
@@ -276,7 +279,13 @@ pub fn evaluate(share: &ShareState, ctx: &AccessContext) -> Decision {
         return Decision::Unavailable;
     }
 
-    let group = |g: RuleGroup| share.rules.iter().filter(move |r| r.group == g).map(|r| rule_match(&r.rule, ctx));
+    let group = |g: RuleGroup| {
+        share
+            .rules
+            .iter()
+            .filter(move |r| r.group == g)
+            .map(|r| rule_match(&r.rule, ctx, share.owner_id))
+    };
 
     // An exclude rule that can't be decided yet (anonymous visitor) doesn't block; identity
     // excludes only take effect once the visitor has authenticated for an include/require rule.
@@ -313,8 +322,9 @@ pub fn evaluate(share: &ShareState, ctx: &AccessContext) -> Decision {
     }
 
     if share.require_owner_mfa {
-        match &ctx.owner {
+        match &ctx.user {
             None => return Decision::NeedOwnerLogin,
+            Some(u) if u.id != share.owner_id => return Decision::Denied,
             Some(o) if o.mfa_at.is_none_or(|t| ctx.now - t > MFA_FRESH_SECS) => {
                 return Decision::NeedOwnerMfa;
             }
@@ -362,6 +372,7 @@ mod tests {
             max_views: None,
             views: 0,
             require_owner_mfa: false,
+            owner_id: 1,
             rules,
         }
     }
@@ -371,7 +382,7 @@ mod tests {
             now: NOW,
             ip: ip.parse().unwrap(),
             country: None,
-            owner: None,
+            user: None,
             identities: vec![],
         }
     }
@@ -385,10 +396,23 @@ mod tests {
     }
 
     fn owner(mut c: AccessContext, mfa_ago: Option<i64>) -> AccessContext {
-        c.owner = Some(OwnerCtx {
+        c.user = Some(UserCtx {
+            id: 1,
             mfa_at: mfa_ago.map(|a| NOW - a),
         });
         c
+    }
+
+    #[test]
+    fn owner_rule_is_the_shares_owner_not_any_user() {
+        let mut s = share(vec![inc(Rule::Owner)]);
+        let mut other = anon("1.1.1.1");
+        other.user = Some(UserCtx { id: 2, mfa_at: Some(NOW) });
+        assert_eq!(evaluate(&s, &other), Decision::Denied);
+        s.rules = vec![inc(Rule::Everyone)];
+        s.require_owner_mfa = true;
+        assert_eq!(evaluate(&s, &other), Decision::Denied, "owner MFA is the owner's, not any user's");
+        assert_eq!(evaluate(&s, &owner(anon("1.1.1.1"), Some(1))), Decision::Allow);
     }
 
     #[test]

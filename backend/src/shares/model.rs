@@ -332,14 +332,41 @@ pub struct OpenResponse {
     pub download_expires_at: Option<i64>,
 }
 
-#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+/// One line of a share's activity log (a view of the audit records targeting the share).
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AccessLogEntry {
     pub ts: i64,
+    /// Audit action, e.g. `share.opened`.
+    pub action: String,
     pub ip: String,
     pub country: Option<String>,
     pub identity: Option<String>,
     pub user_agent: Option<String>,
+    /// Short human label: `opened`, `opened_burned`, `wrong_passphrase`, `blocked:<reason>`, ...
     pub outcome: String,
+}
+
+impl From<crate::audit::Record> for AccessLogEntry {
+    fn from(r: crate::audit::Record) -> Self {
+        let d: Value = serde_json::from_str(&r.details).unwrap_or(Value::Null);
+        let outcome = match r.action.as_str() {
+            "share.opened" if d.get("burned").and_then(Value::as_bool) == Some(true) => "opened_burned".to_string(),
+            "share.opened" => "opened".into(),
+            "share.passphrase_failed" => "wrong_passphrase".into(),
+            "share.destroyed" => "destroyed_bad_passphrase".into(),
+            "share.denied" => format!("blocked:{}", d.get("reason").and_then(Value::as_str).unwrap_or("policy")),
+            other => other.strip_prefix("share.").unwrap_or(other).to_string(),
+        };
+        AccessLogEntry {
+            ts: r.ts,
+            action: r.action,
+            ip: r.ip.unwrap_or_default(),
+            country: d.get("country").and_then(Value::as_str).map(String::from),
+            identity: r.actor_label,
+            user_agent: r.user_agent,
+            outcome,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

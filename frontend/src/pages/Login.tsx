@@ -11,6 +11,7 @@ export function Login() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [params] = useSearchParams()
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [totp, setTotp] = useState('')
   const [needTotp, setNeedTotp] = useState(false)
@@ -24,18 +25,22 @@ export function Login() {
       <section className="card stack narrow">
         <h1>Set up ShareSomething</h1>
         <p>
-          Create the owner account on the server: <code>sharesomething admin init</code> (or <code>docker exec -it sharesomething sharesomething admin init</code>).
+          Create the first account on the server: <code>sharesomething admin init</code> (or <code>docker exec -it sharesomething sharesomething admin init</code>).
         </p>
       </section>
     )
   }
 
-  const showTotp = needTotp || !!me.data?.totp_enabled
+  const team = me.data?.mode === 'team'
+  // Team mode: we don't know the account's factors until the server answers, so ask when needed.
+  const showTotp = needTotp || (!team && !!me.data?.totp_enabled)
+  const offerPasskey = webauthnSupported() && (team || !!me.data?.passkeys)
   const passkeyLogin = async () => {
     setBusy(true)
     setError(null)
     try {
-      const start = await unwrap(api.POST('/api/auth/passkey/login/start'))
+      if (team && !email) throw new Error('Enter your email address first.')
+      const start = await unwrap(api.POST('/api/auth/passkey/login/start', { body: { email: team ? email : null } }))
       const credential = await getPasskey(start.options)
       const res = await unwrap(api.POST('/api/auth/passkey/login/finish', { body: { ceremony_id: start.ceremony_id, credential } }))
       qc.setQueryData(['me'], res)
@@ -54,7 +59,7 @@ export function Login() {
         setBusy(true)
         setError(null)
         try {
-          const res = await unwrap(api.POST('/api/auth/login', { body: { password, totp: totp || null } }))
+          const res = await unwrap(api.POST('/api/auth/login', { body: { email: team ? email : null, password, totp: totp || null } }))
           qc.setQueryData(['me'], res)
           navigate(target, { replace: true })
         } catch (err) {
@@ -66,7 +71,13 @@ export function Login() {
       }}
     >
       <h1>Sign in</h1>
-      {!!me.data?.passkeys && webauthnSupported() && (
+      {team && (
+        <label className="field">
+          Email
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username webauthn" autoFocus required />
+        </label>
+      )}
+      {offerPasskey && (
         <>
           <button type="button" className="btn btn-primary" disabled={busy} onClick={passkeyLogin}>
             Sign in with a passkey
@@ -76,7 +87,7 @@ export function Login() {
       )}
       <label className="field">
         Password
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus required />
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus={!team} required />
       </label>
       {showTotp && (
         <label className="field">
@@ -85,7 +96,7 @@ export function Login() {
         </label>
       )}
       <ErrorNote error={error} />
-      <button className={me.data?.passkeys ? 'btn' : 'btn btn-primary'} disabled={busy}>
+      <button className={offerPasskey ? 'btn' : 'btn btn-primary'} disabled={busy}>
         Sign in
       </button>
     </form>

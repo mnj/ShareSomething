@@ -10,12 +10,368 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/audit": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Query the audit trail (newest first).",
+        "operationId": "audit_list",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only records with `seq` below this (pagination cursor from `next_before`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, max 500 (default 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Action, or a prefix ending in `.` such as `auth.` or `share.`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "description": "Actor label (email/identity) or id, exact match.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "target_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "description": "`success`, `denied` or `error`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Unix seconds, inclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Unix seconds, exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditPage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/audit/export": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Export matching records (oldest first) as JSON lines (ECS) or CSV. The export itself is audited.",
+        "operationId": "audit_export",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only records with `seq` below this (pagination cursor from `next_before`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, max 500 (default 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Action, or a prefix ending in `.` such as `auth.` or `share.`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "description": "Actor label (email/identity) or id, exact match.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "target_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "description": "`success`, `denied` or `error`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Unix seconds, inclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Unix seconds, exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`jsonl` (ECS documents, default) or `csv`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSONL or CSV stream"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/audit/shippers": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Delivery status of each configured SIEM shipper.",
+        "operationId": "audit_shippers",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ShipperStatus"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/audit/verify": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Re-verify the hash chain of the whole audit trail.",
+        "operationId": "audit_verify",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/login": {
       "post": {
         "tags": [
           "auth"
         ],
-        "summary": "Log in as the owner.",
+        "summary": "Sign in with a password (+ TOTP when enabled).",
         "operationId": "login",
         "requestBody": {
           "content": {
@@ -56,7 +412,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Log out and invalidate the current session.",
+        "summary": "Sign out and invalidate the current session.",
         "operationId": "logout",
         "responses": {
           "200": {
@@ -77,7 +433,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Current owner session state.",
+        "summary": "Current session state.",
         "operationId": "me",
         "responses": {
           "200": {
@@ -141,6 +497,16 @@
         ],
         "summary": "Begin a passkey sign-in (replaces password + TOTP).",
         "operationId": "passkey_login_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginStart"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "",
@@ -314,7 +680,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "List registered passkeys.",
+        "summary": "List your passkeys.",
         "operationId": "passkey_list",
         "responses": {
           "200": {
@@ -338,7 +704,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Remove a passkey. Needs a fresh MFA.",
+        "summary": "Remove one of your passkeys. Needs a fresh MFA.",
         "operationId": "passkey_delete",
         "parameters": [
           {
@@ -1096,7 +1462,7 @@
         "tags": [
           "shares"
         ],
-        "summary": "List all shares (newest first).",
+        "summary": "List your shares (newest first).",
         "operationId": "list_shares",
         "responses": {
           "200": {
@@ -1208,7 +1574,7 @@
         "tags": [
           "shares"
         ],
-        "summary": "Permanently delete a share and its access log.",
+        "summary": "Permanently delete a share (its audit records are kept).",
         "operationId": "delete_share",
         "parameters": [
           {
@@ -1536,12 +1902,18 @@
     "schemas": {
       "AccessLogEntry": {
         "type": "object",
+        "description": "One line of a share's activity log (a view of the audit records targeting the share).",
         "required": [
           "ts",
+          "action",
           "ip",
           "outcome"
         ],
         "properties": {
+          "action": {
+            "type": "string",
+            "description": "Audit action, e.g. `share.opened`."
+          },
           "country": {
             "type": [
               "string",
@@ -1558,7 +1930,8 @@
             "type": "string"
           },
           "outcome": {
-            "type": "string"
+            "type": "string",
+            "description": "Short human label: `opened`, `opened_burned`, `wrong_passphrase`, `blocked:<reason>`, ..."
           },
           "ts": {
             "type": "integer",
@@ -1582,6 +1955,28 @@
           "need_auth",
           "denied"
         ]
+      },
+      "AuditPage": {
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Record"
+            }
+          },
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Pass as `before` to fetch the next (older) page."
+          }
+        }
       },
       "AuthMethodInfo": {
         "type": "object",
@@ -1994,6 +2389,13 @@
           "password"
         ],
         "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Team mode: the account's email. Single mode: omit."
+          },
           "password": {
             "type": "string"
           },
@@ -2006,11 +2408,24 @@
           }
         }
       },
+      "LoginStart": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Team mode: whose passkey. Single mode: omit."
+          }
+        }
+      },
       "MeResponse": {
         "type": "object",
         "required": [
           "authenticated",
           "initialised",
+          "mode",
           "totp_enabled",
           "passkeys"
         ],
@@ -2029,13 +2444,28 @@
             "format": "int64",
             "description": "Unix time until which the last MFA (TOTP or passkey) satisfies \"require owner MFA\" shares."
           },
+          "mode": {
+            "type": "string",
+            "description": "`single` or `team`."
+          },
           "passkeys": {
             "type": "integer",
             "format": "int64",
-            "description": "Number of registered passkeys (passkey sign-in is offered when > 0)."
+            "description": "Registered passkeys (same scoping as `totp_enabled`); passkey sign-in is offered when > 0."
           },
           "totp_enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "TOTP state of the signed-in user (single mode: of the owner, so the login form can ask for it)."
+          },
+          "user": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UserInfo"
+              }
+            ]
           }
         }
       },
@@ -2359,6 +2789,91 @@
           }
         }
       },
+      "Record": {
+        "type": "object",
+        "description": "A stored audit record, as hashed, queried and shipped.",
+        "required": [
+          "seq",
+          "ts",
+          "actor_type",
+          "action",
+          "outcome",
+          "details",
+          "prev_hash",
+          "hash"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor_type": {
+            "type": "string"
+          },
+          "details": {
+            "type": "string",
+            "description": "JSON object (stored as text so the hashed bytes are exactly what's stored)."
+          },
+          "hash": {
+            "type": "string"
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "prev_hash": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "target_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "RegisterStart": {
         "type": "object",
         "required": [
@@ -2370,6 +2885,14 @@
             "description": "Label shown in the passkey list, e.g. \"Laptop\"."
           }
         }
+      },
+      "Role": {
+        "type": "string",
+        "enum": [
+          "admin",
+          "member",
+          "auditor"
+        ]
       },
       "Rule": {
         "oneOf": [
@@ -2844,6 +3367,50 @@
           }
         }
       },
+      "ShipperStatus": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "last_seq",
+          "behind",
+          "failures"
+        ],
+        "properties": {
+          "behind": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records not yet delivered."
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
       "SlugRequest": {
         "type": "object",
         "properties": {
@@ -2975,6 +3542,76 @@
               "null"
             ],
             "description": "Empty string clears the title."
+          }
+        }
+      },
+      "UserInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        }
+      },
+      "VerifyReport": {
+        "type": "object",
+        "required": [
+          "ok",
+          "checked"
+        ],
+        "properties": {
+          "checked": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "first_bad_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "First record whose hash or link doesn't match."
+          },
+          "first_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "head_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ok": {
+            "type": "boolean"
           }
         }
       }

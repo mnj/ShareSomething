@@ -2,7 +2,11 @@
 
 use std::time::Duration;
 
-use crate::{app::AppState, util::now};
+use crate::{
+    app::AppState,
+    audit::{Action, Event},
+    util::now,
+};
 
 /// Unfinished uploads are discarded after this long.
 const PENDING_UPLOAD_TTL_SECS: i64 = 24 * 3600;
@@ -58,8 +62,15 @@ pub async fn sweep(state: &AppState) -> sqlx::Result<()> {
     for (id,) in &purge {
         sqlx::query("DELETE FROM shares WHERE id = ?").bind(id).execute(&state.db).await?;
         state.blobs.remove_share(id).await;
+        state
+            .audit
+            .record(Event::new(Action::SharePurged).system("sweeper").target("share", id, None))
+            .await?;
     }
-    for table in ["owner_sessions", "recipient_sessions", "email_challenges", "oidc_states"] {
+    if let Some(days) = state.cfg.audit.retention_days {
+        state.audit.prune(days).await?;
+    }
+    for table in ["user_sessions", "recipient_sessions", "email_challenges", "oidc_states"] {
         sqlx::query(&format!("DELETE FROM {table} WHERE expires_at <= ?"))
             .bind(t)
             .execute(&state.db)

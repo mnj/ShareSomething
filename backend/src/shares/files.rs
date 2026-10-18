@@ -19,10 +19,12 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use super::{model::*, store};
 use crate::{
     app::AppState,
-    auth::owner::Owner,
+    audit::Action,
+    auth::users::CurrentUser,
     blobs::{self, CHUNK_SIZE, E2E_CHUNK_OVERHEAD, SERVER_CHUNK_OVERHEAD},
     crypto,
     error::{AppError, AppResult},
+    net::client_ip::ClientInfo,
     util::{now, sha256},
 };
 
@@ -57,9 +59,12 @@ fn chunk_overhead(mode: EncMode) -> usize {
 }
 
 /// Loads a share that is still being uploaded and checks the upload token.
-async fn pending_share(state: &AppState, id: &str, headers: &HeaderMap) -> AppResult<(store::ShareRow, String)> {
+async fn pending_share(state: &AppState, user: &CurrentUser, id: &str, headers: &HeaderMap) -> AppResult<(store::ShareRow, String)> {
     let token = token_header(headers, UPLOAD_TOKEN_HEADER)?.to_string();
-    let row = store::by_id(&state.db, id).await?.ok_or(AppError::NotFound)?;
+    let row = store::by_id(&state.db, id)
+        .await?
+        .filter(|r| r.owner_id == user.id)
+        .ok_or(AppError::NotFound)?;
     if !row.upload_pending {
         return Err(AppError::Conflict("upload already finalised".into()));
     }
@@ -81,12 +86,12 @@ async fn pending_share(state: &AppState, id: &str, headers: &HeaderMap) -> AppRe
     responses((status = 204), (status = 400, body = crate::error::ErrorBody), (status = 409, body = crate::error::ErrorBody)))]
 async fn upload_chunk(
     State(state): State<AppState>,
-    _owner: Owner,
+    user: CurrentUser,
     Path((id, idx, n)): Path<(String, u32, u64)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<axum::http::StatusCode> {
-    let (row, token) = pending_share(&state, &id, &headers).await?;
+    let (row, token) = pending_share(&state, &user, &id, &headers).await?;
     let file = store::files(&state.db, &id)
         .await?
         .into_iter()
@@ -144,11 +149,12 @@ async fn upload_chunk(
     responses((status = 200, body = ShareSummary), (status = 409, body = crate::error::ErrorBody)))]
 async fn finalize_upload(
     State(state): State<AppState>,
-    owner: Owner,
+    client: ClientInfo,
+    user: CurrentUser,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Json<ShareSummary>> {
-    let (row, _) = pending_share(&state, &id, &headers).await?;
+    let (row, _) = pending_share(&state, &user, &id, &headers).await?;
     let overhead = chunk_overhead(row.enc_mode()) as u64;
     for f in store::files(&state.db, &id).await? {
         let expected = f.size as u64 + f.chunk_count as u64 * overhead;
@@ -161,8 +167,18 @@ async fn finalize_upload(
         .bind(&id)
         .execute(&state.db)
         .await?;
-    tracing::info!(share = %id, "file upload finalised");
-    super::handlers::get_share_summary(&state, owner, &id).await.map(Json)
+    let files = store::files(&state.db, &id).await?;
+    state
+        .audit
+        .record(
+            row.event(Action::ShareFileUploaded)
+                .user(user.id, &user.label)
+                .client(&client)
+                .detail("files", files.len())
+                .detail("bytes", files.iter().map(|f| f.size).sum::<i64>()),
+        )
+        .await?;
+    super::handlers::get_share_summary(&state, &user, &id).await.map(Json)
 }
 
 /// A valid download grant: the share, the file being fetched and (server mode) the DEK.
@@ -224,6 +240,7 @@ async fn chunk_bytes(state: &AppState, g: &Grant, idx: u32, n: u64) -> AppResult
     responses((status = 200, content_type = "application/octet-stream", body = Vec<u8>), (status = 403, body = crate::error::ErrorBody)))]
 async fn download_chunk(
     State(state): State<AppState>,
+    client: ClientInfo,
     Path((slug, idx, n)): Path<(String, u32, u64)>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
@@ -231,6 +248,21 @@ async fn download_chunk(
     let g = grant(&state, &slug, idx, token).await?;
     if n >= g.file.chunk_count as u64 {
         return Err(AppError::NotFound);
+    }
+    // One record per file download (at its first chunk), not per chunk.
+    if n == 0 {
+        state
+            .audit
+            .record(
+                g.row
+                    .event(Action::ShareFileDownloaded)
+                    .recipient(None)
+                    .client(&client)
+                    .detail("file_index", idx)
+                    .detail("bytes", g.file.size)
+                    .detail("via", "chunks"),
+            )
+            .await?;
     }
     let body = chunk_bytes(&state, &g, idx, n).await?;
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], body).into_response())
@@ -275,10 +307,23 @@ fn content_disposition(name: &str) -> String {
     responses((status = 200, content_type = "application/octet-stream", body = Vec<u8>), (status = 403, body = crate::error::ErrorBody)))]
 async fn download_stream(
     State(state): State<AppState>,
+    client: ClientInfo,
     Path((slug, idx)): Path<(String, u32)>,
     axum::Form(form): axum::Form<StreamForm>,
 ) -> AppResult<Response> {
     let g = grant(&state, &slug, idx, &form.token).await?;
+    state
+        .audit
+        .record(
+            g.row
+                .event(Action::ShareFileDownloaded)
+                .recipient(None)
+                .client(&client)
+                .detail("file_index", idx)
+                .detail("bytes", g.file.size)
+                .detail("via", "stream"),
+        )
+        .await?;
     if g.dek.is_none() {
         return Err(AppError::BadRequest(
             "end-to-end encrypted files are decrypted in the browser".into(),

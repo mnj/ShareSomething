@@ -4,6 +4,74 @@
  */
 
 export interface paths {
+    "/api/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Query the audit trail (newest first). */
+        get: operations["audit_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audit/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export matching records (oldest first) as JSON lines (ECS) or CSV. The export itself is audited. */
+        get: operations["audit_export"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audit/shippers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Delivery status of each configured SIEM shipper. */
+        get: operations["audit_shippers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audit/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Re-verify the hash chain of the whole audit trail. */
+        get: operations["audit_verify"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/login": {
         parameters: {
             query?: never;
@@ -13,7 +81,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Log in as the owner. */
+        /** Sign in with a password (+ TOTP when enabled). */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -30,7 +98,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Log out and invalidate the current session. */
+        /** Sign out and invalidate the current session. */
         post: operations["logout"];
         delete?: never;
         options?: never;
@@ -45,7 +113,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Current owner session state. */
+        /** Current session state. */
         get: operations["me"];
         put?: never;
         post?: never;
@@ -164,7 +232,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List registered passkeys. */
+        /** List your passkeys. */
         get: operations["passkey_list"];
         put?: never;
         post?: never;
@@ -184,7 +252,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Remove a passkey. Needs a fresh MFA. */
+        /** Remove one of your passkeys. Needs a fresh MFA. */
         delete: operations["passkey_delete"];
         options?: never;
         head?: never;
@@ -497,7 +565,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List all shares (newest first). */
+        /** List your shares (newest first). */
         get: operations["list_shares"];
         put?: never;
         /** Create a share. */
@@ -519,7 +587,7 @@ export interface paths {
         get: operations["get_share"];
         put?: never;
         post?: never;
-        /** Permanently delete a share and its access log. */
+        /** Permanently delete a share (its audit records are kept). */
         delete: operations["delete_share"];
         options?: never;
         head?: never;
@@ -619,10 +687,14 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description One line of a share's activity log (a view of the audit records targeting the share). */
         AccessLogEntry: {
+            /** @description Audit action, e.g. `share.opened`. */
+            action: string;
             country?: string | null;
             identity?: string | null;
             ip: string;
+            /** @description Short human label: `opened`, `opened_burned`, `wrong_passphrase`, `blocked:<reason>`, ... */
             outcome: string;
             /** Format: int64 */
             ts: number;
@@ -630,6 +702,14 @@ export interface components {
         };
         /** @enum {string} */
         AccessStatus: "ready" | "need_passphrase" | "need_owner_login" | "need_owner_mfa" | "need_auth" | "denied";
+        AuditPage: {
+            events: components["schemas"]["Record"][];
+            /**
+             * Format: int64
+             * @description Pass as `before` to fetch the next (older) page.
+             */
+            next_before?: number | null;
+        };
         AuthMethodInfo: {
             /** @description `email_otp` or `oidc:<provider>`; matches policy rule `methods`. */
             id: string;
@@ -753,9 +833,15 @@ export interface components {
             method: string;
         };
         LoginRequest: {
+            /** @description Team mode: the account's email. Single mode: omit. */
+            email?: string | null;
             password: string;
             /** @description Required when TOTP is enabled. */
             totp?: string | null;
+        };
+        LoginStart: {
+            /** @description Team mode: whose passkey. Single mode: omit. */
+            email?: string | null;
         };
         MeResponse: {
             authenticated: boolean;
@@ -765,12 +851,16 @@ export interface components {
              * @description Unix time until which the last MFA (TOTP or passkey) satisfies "require owner MFA" shares.
              */
             mfa_valid_until?: number | null;
+            /** @description `single` or `team`. */
+            mode: string;
             /**
              * Format: int64
-             * @description Number of registered passkeys (passkey sign-in is offered when > 0).
+             * @description Registered passkeys (same scoping as `totp_enabled`); passkey sign-in is offered when > 0.
              */
             passkeys: number;
+            /** @description TOTP state of the signed-in user (single mode: of the owner, so the login form can ask for it). */
             totp_enabled: boolean;
+            user?: null | components["schemas"]["UserInfo"];
         };
         OpenRequest: {
             /** @description Server mode passphrase. */
@@ -856,10 +946,33 @@ export interface components {
         RecipientMe: {
             identities: components["schemas"]["IdentityInfo"][];
         };
+        /** @description A stored audit record, as hashed, queried and shipped. */
+        Record: {
+            action: string;
+            actor_id?: string | null;
+            actor_label?: string | null;
+            actor_type: string;
+            /** @description JSON object (stored as text so the hashed bytes are exactly what's stored). */
+            details: string;
+            hash: string;
+            ip?: string | null;
+            outcome: string;
+            prev_hash: string;
+            /** Format: int64 */
+            seq: number;
+            target_id?: string | null;
+            target_label?: string | null;
+            target_type?: string | null;
+            /** Format: int64 */
+            ts: number;
+            user_agent?: string | null;
+        };
         RegisterStart: {
             /** @description Label shown in the passkey list, e.g. "Laptop". */
             name: string;
         };
+        /** @enum {string} */
+        Role: "admin" | "member" | "auditor";
         Rule: {
             /** @enum {string} */
             type: "everyone";
@@ -977,6 +1090,22 @@ export interface components {
             /** Format: int64 */
             views: number;
         };
+        ShipperStatus: {
+            /**
+             * Format: int64
+             * @description Records not yet delivered.
+             */
+            behind: number;
+            /** Format: int64 */
+            failures: number;
+            kind: string;
+            last_error?: string | null;
+            /** Format: int64 */
+            last_seq: number;
+            name: string;
+            /** Format: int64 */
+            updated_at?: number | null;
+        };
         SlugRequest: {
             /** @description Generator id from `GET /api/slug-generators`; defaults to the configured default. */
             generator?: string | null;
@@ -1026,6 +1155,28 @@ export interface components {
             /** @description Empty string clears the title. */
             title?: string | null;
         };
+        UserInfo: {
+            email?: string | null;
+            /** Format: int64 */
+            id: number;
+            name: string;
+            role: components["schemas"]["Role"];
+        };
+        VerifyReport: {
+            /** Format: int64 */
+            checked: number;
+            /**
+             * Format: int64
+             * @description First record whose hash or link doesn't match.
+             */
+            first_bad_seq?: number | null;
+            /** Format: int64 */
+            first_seq?: number | null;
+            head_hash?: string | null;
+            /** Format: int64 */
+            head_seq?: number | null;
+            ok: boolean;
+        };
     };
     responses: never;
     parameters: never;
@@ -1035,6 +1186,149 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    audit_list: {
+        parameters: {
+            query?: {
+                /** @description Only records with `seq` below this (pagination cursor from `next_before`). */
+                before?: number | null;
+                /** @description Page size, max 500 (default 100). */
+                limit?: number | null;
+                /** @description Action, or a prefix ending in `.` such as `auth.` or `share.`. */
+                action?: string | null;
+                /** @description Actor label (email/identity) or id, exact match. */
+                actor?: string | null;
+                target_type?: string | null;
+                target_id?: string | null;
+                /** @description `success`, `denied` or `error`. */
+                outcome?: string | null;
+                /** @description Unix seconds, inclusive. */
+                from?: number | null;
+                /** @description Unix seconds, exclusive. */
+                to?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    audit_export: {
+        parameters: {
+            query?: {
+                /** @description Only records with `seq` below this (pagination cursor from `next_before`). */
+                before?: number | null;
+                /** @description Page size, max 500 (default 100). */
+                limit?: number | null;
+                /** @description Action, or a prefix ending in `.` such as `auth.` or `share.`. */
+                action?: string | null;
+                /** @description Actor label (email/identity) or id, exact match. */
+                actor?: string | null;
+                target_type?: string | null;
+                target_id?: string | null;
+                /** @description `success`, `denied` or `error`. */
+                outcome?: string | null;
+                /** @description Unix seconds, inclusive. */
+                from?: number | null;
+                /** @description Unix seconds, exclusive. */
+                to?: number | null;
+                /** @description `jsonl` (ECS documents, default) or `csv`. */
+                format?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSONL or CSV stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    audit_shippers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShipperStatus"][];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    audit_verify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerifyReport"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     login: {
         parameters: {
             query?: never;
@@ -1142,7 +1436,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginStart"];
+            };
+        };
         responses: {
             200: {
                 headers: {

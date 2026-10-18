@@ -15,6 +15,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// `single`: one owner (self-hosting for yourself). `team`: multiple users with roles.
+    pub mode: InstanceMode,
     pub bind: SocketAddr,
     /// Public URL the app is reached at; used to build share links and check `Origin`.
     pub base_url: String,
@@ -38,6 +40,7 @@ pub struct Config {
     pub max_passphrase_attempts: i64,
     /// How long a recipient stays signed in (email code / OIDC).
     pub recipient_session_hours: i64,
+    pub audit: AuditConfig,
     pub proxy: ProxyConfig,
     pub slugs: SlugConfig,
     pub email: EmailConfig,
@@ -126,6 +129,25 @@ impl Default for EmailConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InstanceMode {
+    #[default]
+    Single,
+    Team,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuditConfig {
+    /// Delete audit records older than this (None = keep forever). The chain stays verifiable.
+    pub retention_days: Option<i64>,
+    /// Host name reported to SIEMs (defaults to the `base_url` host).
+    pub hostname: Option<String>,
+    /// SIEM / log destinations.
+    pub shippers: Vec<crate::audit::ship::ShipperConfig>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProxyConfig {
@@ -173,6 +195,8 @@ impl Default for Config {
             retention_days: 7,
             max_passphrase_attempts: 10,
             recipient_session_hours: 12,
+            mode: InstanceMode::Single,
+            audit: AuditConfig::default(),
             proxy: ProxyConfig::default(),
             slugs: SlugConfig::default(),
             email: EmailConfig::default(),
@@ -248,6 +272,15 @@ impl Config {
                 bail!("oidc provider '{}' needs an issuer", p.id);
             }
         }
+        let mut names = std::collections::HashSet::new();
+        for s in &self.audit.shippers {
+            if s.name.is_empty() || !names.insert(s.name.clone()) {
+                bail!("audit shipper names must be unique and non-empty ('{}')", s.name);
+            }
+        }
+        if self.audit.retention_days.is_some_and(|d| d < 1) {
+            bail!("audit.retention_days must be at least 1");
+        }
         if self.email.mode == EmailMode::Smtp && self.email.smtp_host.is_empty() {
             bail!("email.mode = smtp needs email.smtp_host");
         }
@@ -262,6 +295,15 @@ impl Config {
     pub fn origin(&self) -> String {
         url::Url::parse(&self.base_url)
             .map(|u| u.origin().ascii_serialization())
+            .unwrap_or_default()
+    }
+
+    /// Host name reported in shipped audit events.
+    pub fn audit_hostname(&self) -> String {
+        self.audit
+            .hostname
+            .clone()
+            .or_else(|| url::Url::parse(&self.base_url).ok().and_then(|u| u.host_str().map(String::from)))
             .unwrap_or_default()
     }
 

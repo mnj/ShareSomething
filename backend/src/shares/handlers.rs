@@ -12,14 +12,15 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::{
     model::*,
-    policy::{self, AccessContext, Decision, OwnerCtx, PolicyRule, Rule, RuleGroup},
+    policy::{self, AccessContext, Decision, PolicyRule, Rule, RuleGroup, UserCtx},
     store::{self, ShareRow, Wipe},
 };
 use crate::{
     app::AppState,
+    audit::{Action, Event},
     auth::{
-        owner::{Owner, owner_has_mfa},
         recipient::{Recipient, available_methods},
+        users::{CurrentUser, user_has_mfa},
     },
     blobs,
     crypto::{self, CryptoError, ServerMeta},
@@ -154,8 +155,8 @@ pub(super) fn validate_policy(state: &AppState, rules: Vec<PolicyRule>) -> AppRe
     Ok(rules)
 }
 
-async fn validate_mfa_toggle(state: &AppState, require_owner_mfa: bool) -> AppResult<()> {
-    if require_owner_mfa && !owner_has_mfa(state).await? {
+async fn validate_mfa_toggle(state: &AppState, user: &CurrentUser, require_owner_mfa: bool) -> AppResult<()> {
+    if require_owner_mfa && !user_has_mfa(state, user.id).await? {
         return Err(AppError::BadRequest(
             "set up TOTP or a passkey for the owner account before requiring owner MFA".into(),
         ));
@@ -176,10 +177,18 @@ fn decode_b64(field: &str, s: &str) -> AppResult<Vec<u8>> {
         .map_err(|_| AppError::BadRequest(format!("{field} must be base64")))
 }
 
-/// List all shares (newest first).
+/// Loads a share owned by `user` (other users' shares look like they don't exist).
+async fn owned(state: &AppState, user: &CurrentUser, id: &str) -> AppResult<ShareRow> {
+    store::by_id(&state.db, id)
+        .await?
+        .filter(|r| r.owner_id == user.id)
+        .ok_or(AppError::NotFound)
+}
+
+/// List your shares (newest first).
 #[utoipa::path(get, path = "/shares", tag = "shares", responses((status = 200, body = Vec<ShareSummary>)))]
-async fn list_shares(State(state): State<AppState>, _owner: Owner) -> AppResult<Json<Vec<ShareSummary>>> {
-    let rows = store::list(&state.db).await?;
+async fn list_shares(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<ShareSummary>>> {
+    let rows = store::list_owned(&state.db, user.id).await?;
     let mut rules: HashMap<String, Vec<PolicyRule>> = HashMap::new();
     for (id, r) in store::all_rules(&state.db).await? {
         rules.entry(id).or_default().push(r);
@@ -196,14 +205,16 @@ async fn list_shares(State(state): State<AppState>, _owner: Owner) -> AppResult<
     responses((status = 201, body = CreateShareResponse), (status = 400, body = crate::error::ErrorBody), (status = 409, body = crate::error::ErrorBody)))]
 async fn create_share(
     State(state): State<AppState>,
-    _owner: Owner,
+    client: ClientInfo,
+    user: CurrentUser,
     Json(req): Json<CreateShareRequest>,
 ) -> AppResult<(StatusCode, Json<CreateShareResponse>)> {
+    user.can_share()?;
     let title = validate_title(req.title)?;
     let file_sizes = validate_file_specs(&state, req.kind, req.files.as_deref())?;
     validate_redirect(req.kind, req.redirect_secs, false)?;
     let rules = validate_policy(&state, req.policy)?;
-    validate_mfa_toggle(&state, req.require_owner_mfa).await?;
+    validate_mfa_toggle(&state, &user, req.require_owner_mfa).await?;
     if req.max_views.is_some_and(|m| !(1..=MAX_VIEWS).contains(&m)) {
         return Err(AppError::BadRequest(format!("max_views must be 1..{MAX_VIEWS}")));
     }
@@ -307,8 +318,8 @@ async fn create_share(
         let res = sqlx::query(
             "INSERT INTO shares (id, slug, slug_generator, slug_opts, kind, title, enc_mode, enc_meta, ciphertext,
                 passphrase_required, passphrase_verifier, require_owner_mfa, max_views, expires_at, created_at,
-                upload_pending, upload_dek, upload_token_hash, redirect_secs)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                upload_pending, upload_dek, upload_token_hash, redirect_secs, owner_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&candidate)
@@ -329,6 +340,7 @@ async fn create_share(
         .bind(&upload_dek)
         .bind(upload_token.as_deref().map(|t| sha256(t.as_bytes())))
         .bind(req.redirect_secs)
+        .bind(user.id)
         .execute(&mut *tx)
         .await;
         match res {
@@ -368,7 +380,22 @@ async fn create_share(
     tx.commit().await?;
 
     let row = store::by_id(&state.db, &id).await?.ok_or(AppError::NotFound)?;
-    tracing::info!(share = %id, kind = %row.kind, enc = %row.enc_mode, "share created");
+    state
+        .audit
+        .record(
+            row.event(Action::ShareCreated)
+                .user(user.id, &user.label)
+                .client(&client)
+                .detail("kind", row.kind())
+                .detail("enc_mode", row.enc_mode())
+                .detail("slug_generator", &row.slug_generator)
+                .detail("max_views", row.max_views)
+                .detail("expires_at", row.expires_at)
+                .detail("passphrase", row.passphrase_required)
+                .detail("require_owner_mfa", row.require_owner_mfa)
+                .detail("policy", &rules),
+        )
+        .await?;
     Ok((
         StatusCode::CREATED,
         Json(CreateShareResponse {
@@ -379,8 +406,8 @@ async fn create_share(
     ))
 }
 
-pub(super) async fn get_share_summary(state: &AppState, _owner: Owner, id: &str) -> AppResult<ShareSummary> {
-    let row = store::by_id(&state.db, id).await?.ok_or(AppError::NotFound)?;
+pub(super) async fn get_share_summary(state: &AppState, user: &CurrentUser, id: &str) -> AppResult<ShareSummary> {
+    let row = owned(state, user, id).await?;
     let rules = store::rules(&state.db, id).await?;
     Ok(summary(state, &row, rules))
 }
@@ -388,10 +415,8 @@ pub(super) async fn get_share_summary(state: &AppState, _owner: Owner, id: &str)
 /// Get one share's settings.
 #[utoipa::path(get, path = "/shares/{id}", tag = "shares", params(("id" = String, Path)),
     responses((status = 200, body = ShareSummary), (status = 404, body = crate::error::ErrorBody)))]
-async fn get_share(State(state): State<AppState>, _owner: Owner, Path(id): Path<String>) -> AppResult<Json<ShareSummary>> {
-    let row = store::by_id(&state.db, &id).await?.ok_or(AppError::NotFound)?;
-    let rules = store::rules(&state.db, &id).await?;
-    Ok(Json(summary(&state, &row, rules)))
+async fn get_share(State(state): State<AppState>, user: CurrentUser, Path(id): Path<String>) -> AppResult<Json<ShareSummary>> {
+    Ok(Json(get_share_summary(&state, &user, &id).await?))
 }
 
 /// Change a share's title, limits or policy, or revoke it.
@@ -399,14 +424,15 @@ async fn get_share(State(state): State<AppState>, _owner: Owner, Path(id): Path<
     responses((status = 200, body = ShareSummary), (status = 404, body = crate::error::ErrorBody)))]
 async fn update_share(
     State(state): State<AppState>,
-    _owner: Owner,
+    client: ClientInfo,
+    user: CurrentUser,
     Path(id): Path<String>,
     Json(req): Json<UpdateShareRequest>,
 ) -> AppResult<Json<ShareSummary>> {
-    let row = store::by_id(&state.db, &id).await?.ok_or(AppError::NotFound)?;
+    let row = owned(&state, &user, &id).await?;
     let policy = req.policy.map(|p| validate_policy(&state, p)).transpose()?;
     if let Some(m) = req.require_owner_mfa {
-        validate_mfa_toggle(&state, m).await?;
+        validate_mfa_toggle(&state, &user, m).await?;
     }
     validate_redirect(row.kind(), req.redirect_secs, true)?;
     let edits = req.title.is_some()
@@ -434,8 +460,21 @@ async fn update_share(
         return Err(AppError::BadRequest("expires_at must be in the future (max 1 year) or 0".into()));
     }
 
+    let mut changed: Vec<&str> = vec![];
+    for (name, set) in [
+        ("title", req.title.is_some()),
+        ("expires_at", req.expires_at.is_some()),
+        ("max_views", req.max_views.is_some()),
+        ("require_owner_mfa", req.require_owner_mfa.is_some()),
+        ("redirect_secs", req.redirect_secs.is_some()),
+        ("policy", policy.is_some()),
+    ] {
+        if set {
+            changed.push(name);
+        }
+    }
     let mut tx = state.db.begin().await?;
-    if let Some(title) = req.title {
+    if let Some(title) = req.title.clone() {
         sqlx::query("UPDATE shares SET title = ? WHERE id = ?")
             .bind(validate_title(Some(title))?)
             .bind(&id)
@@ -473,45 +512,77 @@ async fn update_share(
     if let Some(rules) = &policy {
         store::replace_rules(&mut tx, &id, rules).await?;
     }
-    if req.revoke && row.revoked_at.is_none() {
+    let revoking = req.revoke && row.revoked_at.is_none();
+    if revoking {
         store::wipe(&mut *tx, &id, Wipe::Revoked).await?;
-        tracing::info!(share = %id, "share revoked");
     }
     tx.commit().await?;
     if req.revoke {
         store::destroy_files(&state, &id).await?;
     }
-    get_share(State(state), _owner, Path(id)).await
+    if !changed.is_empty() {
+        let mut e = row
+            .event(Action::ShareUpdated)
+            .user(user.id, &user.label)
+            .client(&client)
+            .detail("changed", &changed);
+        if let Some(p) = &policy {
+            e = e.detail("policy", p);
+        }
+        if let Some(v) = req.max_views {
+            e = e.detail("max_views", v);
+        }
+        if let Some(v) = req.expires_at {
+            e = e.detail("expires_at", v);
+        }
+        state.audit.record(e).await?;
+    }
+    if revoking {
+        state
+            .audit
+            .record(row.event(Action::ShareRevoked).user(user.id, &user.label).client(&client))
+            .await?;
+    }
+    Ok(Json(get_share_summary(&state, &user, &id).await?))
 }
 
-/// Permanently delete a share and its access log.
+/// Permanently delete a share (its audit records are kept).
 #[utoipa::path(delete, path = "/shares/{id}", tag = "shares", params(("id" = String, Path)),
     responses((status = 204), (status = 404, body = crate::error::ErrorBody)))]
-async fn delete_share(State(state): State<AppState>, _owner: Owner, Path(id): Path<String>) -> AppResult<StatusCode> {
-    let res = sqlx::query("DELETE FROM shares WHERE id = ?").bind(&id).execute(&state.db).await?;
-    if res.rows_affected() == 0 {
-        return Err(AppError::NotFound);
-    }
+async fn delete_share(
+    State(state): State<AppState>,
+    client: ClientInfo,
+    user: CurrentUser,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    let row = owned(&state, &user, &id).await?;
+    sqlx::query("DELETE FROM shares WHERE id = ?").bind(&id).execute(&state.db).await?;
     state.blobs.remove_share(&id).await;
+    state
+        .audit
+        .record(row.event(Action::ShareDeleted).user(user.id, &user.label).client(&client))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Access log for a share, newest first.
 #[utoipa::path(get, path = "/shares/{id}/log", tag = "shares", params(("id" = String, Path)),
     responses((status = 200, body = Vec<AccessLogEntry>)))]
-async fn share_log(State(state): State<AppState>, _owner: Owner, Path(id): Path<String>) -> AppResult<Json<Vec<AccessLogEntry>>> {
-    let rows: Vec<AccessLogEntry> = sqlx::query_as(
-        "SELECT ts, ip, country, identity, user_agent, outcome FROM access_log WHERE share_id = ? ORDER BY ts DESC, id DESC LIMIT 500",
-    )
-    .bind(&id)
-    .fetch_all(&state.db)
-    .await?;
-    Ok(Json(rows))
+async fn share_log(State(state): State<AppState>, user: CurrentUser, Path(id): Path<String>) -> AppResult<Json<Vec<AccessLogEntry>>> {
+    owned(&state, &user, &id).await?;
+    let filter = crate::audit::api::AuditFilter {
+        target_type: Some("share".into()),
+        target_id: Some(id),
+        limit: Some(500),
+        ..Default::default()
+    };
+    let page = crate::audit::api::query(&state.db, &filter).await?;
+    Ok(Json(page.events.into_iter().map(AccessLogEntry::from).collect()))
 }
 
 /// Enabled link generators and their options.
 #[utoipa::path(get, path = "/slug-generators", tag = "shares", responses((status = 200, body = Vec<GeneratorInfo>)))]
-async fn list_generators(State(state): State<AppState>, _owner: Owner) -> Json<Vec<GeneratorInfo>> {
+async fn list_generators(State(state): State<AppState>, _user: CurrentUser) -> Json<Vec<GeneratorInfo>> {
     Json(state.slugs.list())
 }
 
@@ -520,7 +591,7 @@ async fn list_generators(State(state): State<AppState>, _owner: Owner) -> Json<V
     responses((status = 200, body = PreviewResponse), (status = 400, body = crate::error::ErrorBody)))]
 async fn preview_slug(
     State(state): State<AppState>,
-    _owner: Owner,
+    _user: CurrentUser,
     Path(id): Path<String>,
     Json(req): Json<PreviewRequest>,
 ) -> AppResult<Json<PreviewResponse>> {
@@ -540,18 +611,38 @@ async fn preview_slug(
 // Recipient API
 // ---------------------------------------------------------------------------------------------
 
-fn access_context(client: &ClientInfo, owner: Option<&Owner>, recipient: &Recipient) -> AccessContext {
+fn access_context(client: &ClientInfo, user: Option<&CurrentUser>, recipient: &Recipient) -> AccessContext {
     AccessContext {
         now: now(),
         ip: client.ip,
         country: client.country.clone(),
-        owner: owner.map(|o| OwnerCtx { mfa_at: o.mfa_at }),
+        user: user.map(|u| UserCtx {
+            id: u.id,
+            mfa_at: u.mfa_at,
+        }),
         identities: recipient.identities.clone(),
     }
 }
 
-fn identity_label(owner: Option<&Owner>, recipient: &Recipient) -> Option<String> {
-    owner.map(|_| "owner".to_string()).or_else(|| recipient.label())
+/// Attributes a share-visit event to whoever the visitor is: a signed-in user or a recipient.
+fn visitor(e: Event, client: &ClientInfo, user: Option<&CurrentUser>, recipient: &Recipient) -> Event {
+    let e = e.client(client);
+    match user {
+        Some(u) => e.user(u.id, &u.label),
+        None => e.recipient(recipient.label()),
+    }
+}
+
+/// Stable, SIEM-friendly reason for a refused open.
+fn decision_reason(d: &Decision) -> &'static str {
+    match d {
+        Decision::Allow => "allowed",
+        Decision::Unavailable => "unavailable",
+        Decision::Denied => "policy",
+        Decision::NeedOwnerLogin => "owner_login_required",
+        Decision::NeedOwnerMfa => "owner_mfa_required",
+        Decision::NeedRecipientAuth(_) => "sign_in_required",
+    }
 }
 
 /// Narrows a rule's acceptable methods (empty = any) to those this server actually offers.
@@ -588,7 +679,7 @@ fn decision_error(d: &Decision) -> AppError {
 async fn share_info(
     State(state): State<AppState>,
     client: ClientInfo,
-    owner: Option<Owner>,
+    user: Option<CurrentUser>,
     recipient: Recipient,
     Path(slug): Path<String>,
 ) -> AppResult<Json<ShareInfo>> {
@@ -597,7 +688,7 @@ async fn share_info(
     }
     let row = store::by_slug(&state.db, &slug).await?.ok_or(AppError::NotFound)?;
     let rules = store::rules(&state.db, &row.id).await?;
-    let decision = policy::evaluate(&row.state(rules), &access_context(&client, owner.as_ref(), &recipient));
+    let decision = policy::evaluate(&row.state(rules), &access_context(&client, user.as_ref(), &recipient));
 
     let (status, auth_methods) = match &decision {
         Decision::Unavailable => return Err(AppError::NotFound),
@@ -625,9 +716,13 @@ async fn share_info(
 }
 
 /// Records a wrong passphrase; destroys the share after too many.
-async fn wrong_passphrase(state: &AppState, row: &ShareRow, client: &ClientInfo, owner: Option<&Owner>, recipient: &Recipient) -> AppError {
-    let who = identity_label(owner, recipient);
-    let who = who.as_deref();
+async fn wrong_passphrase(
+    state: &AppState,
+    row: &ShareRow,
+    client: &ClientInfo,
+    user: Option<&CurrentUser>,
+    recipient: &Recipient,
+) -> AppError {
     let attempts: Result<(i64,), _> =
         sqlx::query_as("UPDATE shares SET failed_attempts = failed_attempts + 1 WHERE id = ? RETURNING failed_attempts")
             .bind(&row.id)
@@ -642,11 +737,19 @@ async fn wrong_passphrase(state: &AppState, row: &ShareRow, client: &ClientInfo,
         if let Err(e) = store::destroy_files(state, &row.id).await {
             return e.into();
         }
-        store::log_access(&state.db, &row.id, client, who, "destroyed_bad_passphrase").await;
+        let e = visitor(row.event(Action::ShareDestroyed), client, user, recipient)
+            .detail("reason", "too_many_wrong_passphrases")
+            .detail("attempts", attempts);
+        if let Err(e) = state.audit.record(e).await {
+            return e.into();
+        }
         tracing::warn!(share = %row.id, "share destroyed after too many wrong passphrases");
         return AppError::NotFound;
     }
-    store::log_access(&state.db, &row.id, client, who, "wrong_passphrase").await;
+    let e = visitor(row.event(Action::SharePassphraseFailed).denied(), client, user, recipient).detail("attempts", attempts);
+    if let Err(e) = state.audit.record(e).await {
+        return e.into();
+    }
     AppError::Access("wrong_passphrase", format!("wrong passphrase ({} attempts left)", limit - attempts))
 }
 
@@ -656,7 +759,7 @@ async fn wrong_passphrase(state: &AppState, row: &ShareRow, client: &ClientInfo,
 async fn open_share(
     State(state): State<AppState>,
     client: ClientInfo,
-    owner: Option<Owner>,
+    user: Option<CurrentUser>,
     recipient: Recipient,
     Path(slug): Path<String>,
     body: Option<Json<OpenRequest>>,
@@ -667,12 +770,12 @@ async fn open_share(
     let req = body.map(|b| b.0).unwrap_or_default();
     let row = store::by_slug(&state.db, &slug).await?.ok_or(AppError::NotFound)?;
     let rules = store::rules(&state.db, &row.id).await?;
-    let decision = policy::evaluate(&row.state(rules), &access_context(&client, owner.as_ref(), &recipient));
-    let who = identity_label(owner.as_ref(), &recipient);
-    let who = who.as_deref();
+    let decision = policy::evaluate(&row.state(rules), &access_context(&client, user.as_ref(), &recipient));
     if decision != Decision::Allow {
         if decision != Decision::Unavailable {
-            store::log_access(&state.db, &row.id, &client, who, &format!("blocked:{decision:?}").to_lowercase()).await;
+            let e = visitor(row.event(Action::ShareDenied).denied(), &client, user.as_ref(), &recipient)
+                .detail("reason", decision_reason(&decision));
+            state.audit.record(e).await?;
         }
         return Err(decision_error(&decision));
     }
@@ -698,7 +801,7 @@ async fn open_share(
                     Some(dek),
                 ),
                 Err(CryptoError::Decrypt) if row.passphrase_required => {
-                    return Err(wrong_passphrase(&state, &row, &client, owner.as_ref(), &recipient).await);
+                    return Err(wrong_passphrase(&state, &row, &client, user.as_ref(), &recipient).await);
                 }
                 Err(e) => return Err(AppError::Internal(e.into())),
             }
@@ -710,7 +813,7 @@ async fn open_share(
                 };
                 let given = sha256(&decode_b64("passphrase_verifier", v)?);
                 if !bool::from(given.ct_eq(stored)) {
-                    return Err(wrong_passphrase(&state, &row, &client, owner.as_ref(), &recipient).await);
+                    return Err(wrong_passphrase(&state, &row, &client, user.as_ref(), &recipient).await);
                 }
             }
             (None, None)
@@ -741,7 +844,15 @@ async fn open_share(
         None
     };
     tx.commit().await?;
-    store::log_access(&state.db, &row.id, &client, who, if burned { "opened_burned" } else { "opened" }).await;
+    state
+        .audit
+        .record(
+            visitor(row.event(Action::ShareOpened), &client, user.as_ref(), &recipient)
+                .detail("burned", burned)
+                .detail("views", views)
+                .detail("max_views", row.max_views),
+        )
+        .await?;
 
     let e2e = row.enc_mode() == EncMode::E2e;
     Ok(Json(OpenResponse {

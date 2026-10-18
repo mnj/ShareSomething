@@ -6,10 +6,12 @@ import { Dashboard } from './pages/Dashboard'
 import { Login } from './pages/Login'
 import { NewShare } from './pages/NewShare'
 import { Settings } from './pages/Settings'
+import { Audit } from './pages/Audit'
 import { ShareView } from './pages/ShareView'
 
 function Layout() {
   const me = useMe()
+  const loc = useLocation()
   const qc = useQueryClient()
   return (
     <>
@@ -22,9 +24,15 @@ function Layout() {
             <Link to="/" className="btn btn-small btn-ghost">
               Shares
             </Link>
+            {(me.data.user?.role === 'admin' || me.data.user?.role === 'auditor') && (
+              <Link to="/audit" className="btn btn-small btn-ghost">
+                Audit
+              </Link>
+            )}
             <Link to="/settings" className="btn btn-small btn-ghost">
               Settings
             </Link>
+            <span className="hint user-label">{me.data.user?.email ?? me.data.user?.name}</span>
           <button
             type="button"
             className="btn btn-small btn-ghost"
@@ -38,7 +46,7 @@ function Layout() {
           </nav>
         )}
       </header>
-      <main className="container">
+      <main className={loc.pathname.startsWith('/audit') ? 'container wide' : 'container'}>
         <Outlet />
       </main>
     </>
@@ -63,6 +71,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/new" element={<NewShare />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/audit" element={<Audit />} />
         </Route>
         <Route path="*" element={<p className="hint">Page not found.</p>} />
       </Route>

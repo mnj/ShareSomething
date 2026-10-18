@@ -2,6 +2,10 @@
 # Every key can also be set via environment: SS_<KEY>, nested with "__"
 # (e.g. SS_BASE_URL, SS_PROXY__MODE, SS_PROXY__TRUSTED_PROXIES="172.30.0.0/24,127.0.0.1").
 
+# single: one owner (self-hosting for yourself). team: several users with roles (admin, member,
+# auditor). Team sign-up/invites and SSO arrive in a later release; until then use `admin init`.
+mode = "single"
+
 bind = "0.0.0.0:8080"
 # Public URL people use. Builds share links and is checked against the Origin header.
 # Cookies are marked Secure automatically when this is https.
@@ -83,3 +87,23 @@ smtp_password = ""
 # kind = "github"             # OAuth app; uses the account's verified emails
 # client_id = ""
 # client_secret = ""
+
+# Audit trail: hash-chained, tamper-evident, and optionally streamed to your SIEM.
+# Full guide with Splunk, Elastic, Sentinel/QRadar (CEF), syslog and webhook examples: docs/audit.md
+[audit]
+# retention_days = 400          # default: keep forever
+# hostname = "share.example.com"
+
+# [[audit.shippers]]
+# name = "splunk"
+# type = "http"
+# preset = "splunk_hec"
+# url = "https://splunk.example.com:8088/services/collector/event"
+# token = ""
+
+# [[audit.shippers]]
+# name = "siem-cef"
+# type = "syslog"
+# address = "siem.example.com:6514"
+# transport = "tls"
+# format = "cef"

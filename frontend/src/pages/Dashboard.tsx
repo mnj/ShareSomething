@@ -5,9 +5,11 @@ import { api, unwrap, type ShareSummary } from '../api/client'
 import { CopyButton } from '../components/CopyButton'
 import { EditShare } from '../components/EditShare'
 import { ErrorNote } from '../components/ErrorNote'
+import { useMe } from '../lib/auth'
 import { describePolicy, formatRelative, formatTime, viewsLabel } from '../lib/format'
 
 export function Dashboard() {
+  const me = useMe()
   const shares = useQuery({ queryKey: ['shares'], queryFn: () => unwrap(api.GET('/api/shares')), refetchInterval: 30_000 })
   const [filter, setFilter] = useState<'active' | 'all'>('active')
   const list = (shares.data ?? []).filter((s) => filter === 'all' || s.status === 'active')
@@ -16,9 +18,11 @@ export function Dashboard() {
     <div className="stack">
       <div className="row spread">
         <h1>Shares</h1>
-        <Link to="/new" className="btn btn-primary">
-          + New share
-        </Link>
+        {me.data?.user?.role !== 'auditor' && (
+          <Link to="/new" className="btn btn-primary">
+            + New share
+          </Link>
+        )}
       </div>
       <div className="segmented small" role="radiogroup" aria-label="Filter">
         {(['active', 'all'] as const).map((f) => (

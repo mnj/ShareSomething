@@ -1,4 +1,4 @@
-//! Owner passkeys (WebAuthn): register, sign in, and use as the MFA step-up.
+//! User passkeys (WebAuthn): register, sign in, and use as the MFA step-up.
 //!
 //! Passkeys require user verification, so a passkey sign-in counts as a fresh MFA. Ceremony
 //! state lives in memory for a few minutes; a restart just means trying again.
@@ -24,9 +24,10 @@ use webauthn_rs::prelude::{
     Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, Uuid, Webauthn, WebauthnBuilder,
 };
 
-use super::owner::{MeResponse, Owner, mark_mfa, me_response, require_fresh_mfa, start_session};
+use super::users::{CurrentUser, MeResponse, load_user, mark_mfa, me_response, require_fresh_mfa, resolve_login_user, start_session};
 use crate::{
     app::AppState,
+    audit::{Action, Event},
     config::Config,
     error::{AppError, AppResult},
     net::client_ip::ClientInfo,
@@ -36,9 +37,19 @@ use crate::{
 const CEREMONY_TTL: Duration = Duration::from_secs(5 * 60);
 
 enum Ceremony {
-    Register { state: PasskeyRegistration, name: String },
-    Login(PasskeyAuthentication),
-    StepUp { state: PasskeyAuthentication, session: Vec<u8> },
+    Register {
+        state: PasskeyRegistration,
+        name: String,
+        user_id: i64,
+    },
+    Login {
+        state: PasskeyAuthentication,
+        user_id: i64,
+    },
+    StepUp {
+        state: PasskeyAuthentication,
+        session: Vec<u8>,
+    },
 }
 
 pub struct Passkeys {
@@ -100,14 +111,18 @@ fn cred_key(p: &Passkey) -> String {
     URL_SAFE_NO_PAD.encode(p.cred_id().as_ref())
 }
 
-async fn load_passkeys(state: &AppState) -> AppResult<Vec<Passkey>> {
-    let rows: Vec<(String,)> = sqlx::query_as("SELECT passkey FROM owner_passkeys").fetch_all(&state.db).await?;
+async fn load_passkeys(state: &AppState, user_id: i64) -> AppResult<Vec<Passkey>> {
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT passkey FROM user_passkeys WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_all(&state.db)
+        .await?;
     Ok(rows.into_iter().filter_map(|(json,)| serde_json::from_str(&json).ok()).collect())
 }
 
-/// Stable WebAuthn user handle for the single owner.
-async fn user_id(state: &AppState) -> AppResult<Uuid> {
-    let row: Option<(Option<String>,)> = sqlx::query_as("SELECT webauthn_user_id FROM owner WHERE id = 1")
+/// Stable WebAuthn user handle for a user.
+async fn webauthn_user_id(state: &AppState, user_id: i64) -> AppResult<Uuid> {
+    let row: Option<(Option<String>,)> = sqlx::query_as("SELECT webauthn_user_id FROM users WHERE id = ?")
+        .bind(user_id)
         .fetch_optional(&state.db)
         .await?;
     match row {
@@ -115,8 +130,9 @@ async fn user_id(state: &AppState) -> AppResult<Uuid> {
         Some((Some(id),)) => Uuid::parse_str(&id).map_err(|e| AppError::Internal(e.into())),
         Some((None,)) => {
             let id = Uuid::new_v4();
-            sqlx::query("UPDATE owner SET webauthn_user_id = ? WHERE id = 1")
+            sqlx::query("UPDATE users SET webauthn_user_id = ? WHERE id = ?")
                 .bind(id.to_string())
+                .bind(user_id)
                 .execute(&state.db)
                 .await?;
             Ok(id)
@@ -124,8 +140,8 @@ async fn user_id(state: &AppState) -> AppResult<Uuid> {
     }
 }
 
-/// Verifies an assertion against stored passkeys and persists counter/backup-state changes.
-async fn finish_auth(state: &AppState, ceremony: &PasskeyAuthentication, credential: Value) -> AppResult<()> {
+/// Verifies an assertion against a user's passkeys and persists counter/backup-state changes.
+async fn finish_auth(state: &AppState, user_id: i64, ceremony: &PasskeyAuthentication, credential: Value) -> AppResult<()> {
     let cred: PublicKeyCredential =
         serde_json::from_value(credential).map_err(|e| AppError::BadRequest(format!("malformed passkey response: {e}")))?;
     let result = state
@@ -136,12 +152,13 @@ async fn finish_auth(state: &AppState, ceremony: &PasskeyAuthentication, credent
             tracing::warn!(error = %e, "passkey authentication failed");
             AppError::AuthFailed("passkey_failed", "passkey verification failed")
         })?;
-    for mut pk in load_passkeys(state).await? {
+    for mut pk in load_passkeys(state, user_id).await? {
         if pk.update_credential(&result).is_some() {
-            sqlx::query("UPDATE owner_passkeys SET passkey = ?, last_used_at = ? WHERE cred_id = ?")
+            sqlx::query("UPDATE user_passkeys SET passkey = ?, last_used_at = ? WHERE cred_id = ? AND user_id = ?")
                 .bind(serde_json::to_string(&pk).map_err(anyhow::Error::from)?)
                 .bind(now())
                 .bind(cred_key(&pk))
+                .bind(user_id)
                 .execute(&state.db)
                 .await?;
         }
@@ -165,6 +182,12 @@ pub struct CeremonyFinish {
     pub credential: Value,
 }
 
+#[derive(Deserialize, ToSchema, Default)]
+pub struct LoginStart {
+    /// Team mode: whose passkey. Single mode: omit.
+    pub email: Option<String>,
+}
+
 #[derive(Deserialize, ToSchema)]
 pub struct RegisterStart {
     /// Label shown in the passkey list, e.g. "Laptop".
@@ -183,11 +206,12 @@ fn options_json<T: Serialize>(o: &T) -> AppResult<Value> {
     serde_json::to_value(o).map_err(|e| AppError::Internal(e.into()))
 }
 
-/// List registered passkeys.
+/// List your passkeys.
 #[utoipa::path(get, path = "/auth/passkeys", tag = "auth", operation_id = "passkey_list", responses((status = 200, body = Vec<PasskeyInfo>)))]
-async fn list(State(state): State<AppState>, _owner: Owner) -> AppResult<Json<Vec<PasskeyInfo>>> {
+async fn list(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Vec<PasskeyInfo>>> {
     let rows: Vec<(String, String, i64, Option<i64>)> =
-        sqlx::query_as("SELECT cred_id, name, created_at, last_used_at FROM owner_passkeys ORDER BY created_at")
+        sqlx::query_as("SELECT cred_id, name, created_at, last_used_at FROM user_passkeys WHERE user_id = ? ORDER BY created_at")
+            .bind(user.id)
             .fetch_all(&state.db)
             .await?;
     Ok(Json(
@@ -202,38 +226,50 @@ async fn list(State(state): State<AppState>, _owner: Owner) -> AppResult<Json<Ve
     ))
 }
 
-/// Remove a passkey. Needs a fresh MFA.
+/// Remove one of your passkeys. Needs a fresh MFA.
 #[utoipa::path(delete, path = "/auth/passkeys/{id}", tag = "auth", operation_id = "passkey_delete", params(("id" = String, Path)),
     responses((status = 204), (status = 403, body = crate::error::ErrorBody)))]
-async fn delete(State(state): State<AppState>, owner: Owner, Path(id): Path<String>) -> AppResult<StatusCode> {
-    require_fresh_mfa(&state, &owner).await?;
-    let res = sqlx::query("DELETE FROM owner_passkeys WHERE cred_id = ?")
+async fn delete(State(state): State<AppState>, client: ClientInfo, user: CurrentUser, Path(id): Path<String>) -> AppResult<StatusCode> {
+    require_fresh_mfa(&state, &user).await?;
+    let res = sqlx::query("DELETE FROM user_passkeys WHERE cred_id = ? AND user_id = ?")
         .bind(&id)
+        .bind(user.id)
         .execute(&state.db)
         .await?;
     if res.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
-    tracing::info!("owner passkey removed");
+    state
+        .audit
+        .record(user.event(Action::AuthPasskeyRemoved).client(&client).target("passkey", &id, None))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Begin registering a new passkey. Needs a fresh MFA when TOTP or another passkey exists.
 #[utoipa::path(post, path = "/auth/passkey/register/start", tag = "auth", operation_id = "passkey_register_start", request_body = RegisterStart,
     responses((status = 200, body = CeremonyStart), (status = 403, body = crate::error::ErrorBody)))]
-async fn register_start(State(state): State<AppState>, owner: Owner, Json(req): Json<RegisterStart>) -> AppResult<Json<CeremonyStart>> {
-    require_fresh_mfa(&state, &owner).await?;
+async fn register_start(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Json(req): Json<RegisterStart>,
+) -> AppResult<Json<CeremonyStart>> {
+    require_fresh_mfa(&state, &user).await?;
     let name = req.name.trim().to_string();
     if name.is_empty() || name.chars().count() > 64 {
         return Err(AppError::BadRequest("passkey name must be 1-64 characters".into()));
     }
-    let exclude: Vec<_> = load_passkeys(&state).await?.iter().map(|p| p.cred_id().clone()).collect();
+    let exclude: Vec<_> = load_passkeys(&state, user.id).await?.iter().map(|p| p.cred_id().clone()).collect();
     let (options, reg) = state
         .passkeys
         .webauthn()?
-        .start_passkey_registration(user_id(&state).await?, "owner", "ShareSomething owner", Some(exclude))
+        .start_passkey_registration(webauthn_user_id(&state, user.id).await?, &user.label, &user.label, Some(exclude))
         .map_err(|e| AppError::Internal(e.into()))?;
-    let ceremony_id = state.passkeys.put(Ceremony::Register { state: reg, name });
+    let ceremony_id = state.passkeys.put(Ceremony::Register {
+        state: reg,
+        name,
+        user_id: user.id,
+    });
     Ok(Json(CeremonyStart {
         ceremony_id,
         options: options_json(&options)?,
@@ -243,10 +279,18 @@ async fn register_start(State(state): State<AppState>, owner: Owner, Json(req): 
 /// Finish registering a passkey.
 #[utoipa::path(post, path = "/auth/passkey/register/finish", tag = "auth", operation_id = "passkey_register_finish", request_body = CeremonyFinish,
     responses((status = 200, body = PasskeyInfo), (status = 401, body = crate::error::ErrorBody)))]
-async fn register_finish(State(state): State<AppState>, _owner: Owner, Json(req): Json<CeremonyFinish>) -> AppResult<Json<PasskeyInfo>> {
-    let Ceremony::Register { state: reg, name } = state.passkeys.take(&req.ceremony_id)? else {
+async fn register_finish(
+    State(state): State<AppState>,
+    client: ClientInfo,
+    user: CurrentUser,
+    Json(req): Json<CeremonyFinish>,
+) -> AppResult<Json<PasskeyInfo>> {
+    let Ceremony::Register { state: reg, name, user_id } = state.passkeys.take(&req.ceremony_id)? else {
         return Err(AppError::BadRequest("wrong ceremony".into()));
     };
+    if user_id != user.id {
+        return Err(AppError::BadRequest("ceremony belongs to another user".into()));
+    }
     let cred: RegisterPublicKeyCredential =
         serde_json::from_value(req.credential).map_err(|e| AppError::BadRequest(format!("malformed passkey response: {e}")))?;
     let passkey = state.passkeys.webauthn()?.finish_passkey_registration(&cred, &reg).map_err(|e| {
@@ -259,34 +303,52 @@ async fn register_finish(State(state): State<AppState>, _owner: Owner, Json(req)
         created_at: now(),
         last_used_at: None,
     };
-    sqlx::query("INSERT INTO owner_passkeys (cred_id, name, passkey, created_at) VALUES (?, ?, ?, ?)")
+    sqlx::query("INSERT INTO user_passkeys (cred_id, user_id, name, passkey, created_at) VALUES (?, ?, ?, ?, ?)")
         .bind(&info.id)
+        .bind(user.id)
         .bind(&info.name)
         .bind(serde_json::to_string(&passkey).map_err(anyhow::Error::from)?)
         .bind(info.created_at)
         .execute(&state.db)
         .await?;
-    tracing::info!(name = %info.name, "owner passkey registered");
+    state
+        .audit
+        .record(
+            user.event(Action::AuthPasskeyAdded)
+                .client(&client)
+                .target("passkey", &info.id, Some(info.name.clone())),
+        )
+        .await?;
     Ok(Json(info))
 }
 
 /// Begin a passkey sign-in (replaces password + TOTP).
-#[utoipa::path(post, path = "/auth/passkey/login/start", tag = "auth", operation_id = "passkey_login_start",
+#[utoipa::path(post, path = "/auth/passkey/login/start", tag = "auth", operation_id = "passkey_login_start", request_body = LoginStart,
     responses((status = 200, body = CeremonyStart), (status = 400, body = crate::error::ErrorBody)))]
-async fn login_start(State(state): State<AppState>, client: ClientInfo) -> AppResult<Json<CeremonyStart>> {
+async fn login_start(State(state): State<AppState>, client: ClientInfo, body: Option<Json<LoginStart>>) -> AppResult<Json<CeremonyStart>> {
     if !state.limits.login.check(&client.ip.to_string()) {
         return Err(AppError::TooManyRequests);
     }
-    let passkeys = load_passkeys(&state).await?;
-    if passkeys.is_empty() {
-        return Err(AppError::BadRequest("no passkeys registered".into()));
-    }
+    let req = body.map(|b| b.0).unwrap_or_default();
+    let user = resolve_login_user(&state, req.email.as_deref())
+        .await?
+        .filter(|u| u.status == "active");
+    let passkeys = match &user {
+        Some(u) => load_passkeys(&state, u.id).await?,
+        None => vec![],
+    };
+    let (Some(user), false) = (user, passkeys.is_empty()) else {
+        return Err(AppError::BadRequest("no passkeys registered for this account".into()));
+    };
     let (options, auth) = state
         .passkeys
         .webauthn()?
         .start_passkey_authentication(&passkeys)
         .map_err(|e| AppError::Internal(e.into()))?;
-    let ceremony_id = state.passkeys.put(Ceremony::Login(auth));
+    let ceremony_id = state.passkeys.put(Ceremony::Login {
+        state: auth,
+        user_id: user.id,
+    });
     Ok(Json(CeremonyStart {
         ceremony_id,
         options: options_json(&options)?,
@@ -302,20 +364,36 @@ async fn login_finish(
     jar: CookieJar,
     Json(req): Json<CeremonyFinish>,
 ) -> AppResult<(CookieJar, Json<MeResponse>)> {
-    let Ceremony::Login(auth) = state.passkeys.take(&req.ceremony_id)? else {
+    let Ceremony::Login { state: auth, user_id } = state.passkeys.take(&req.ceremony_id)? else {
         return Err(AppError::BadRequest("wrong ceremony".into()));
     };
-    finish_auth(&state, &auth, req.credential).await?;
-    let (jar, session) = start_session(&state, jar, Some(now())).await?;
-    tracing::info!(ip = %client.ip, "owner logged in with passkey");
+    let user = load_user(&state, user_id).await?;
+    if let Err(e) = finish_auth(&state, user_id, &auth, req.credential).await {
+        state
+            .audit
+            .record(
+                Event::new(Action::AuthLoginFailed)
+                    .denied()
+                    .user(user.id, user.label())
+                    .client(&client)
+                    .detail("method", "passkey"),
+            )
+            .await?;
+        return Err(e);
+    }
+    let (jar, session) = start_session(&state, jar, &user, Some(now())).await?;
+    state
+        .audit
+        .record(session.event(Action::AuthLogin).client(&client).detail("method", "passkey"))
+        .await?;
     Ok((jar, Json(me_response(&state, Some(&session)).await?)))
 }
 
 /// Begin a passkey MFA step-up for the current session.
 #[utoipa::path(post, path = "/auth/passkey/step-up/start", tag = "auth", operation_id = "passkey_step_up_start",
     responses((status = 200, body = CeremonyStart)))]
-async fn step_up_start(State(state): State<AppState>, owner: Owner) -> AppResult<Json<CeremonyStart>> {
-    let passkeys = load_passkeys(&state).await?;
+async fn step_up_start(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<CeremonyStart>> {
+    let passkeys = load_passkeys(&state, user.id).await?;
     if passkeys.is_empty() {
         return Err(AppError::BadRequest("no passkeys registered".into()));
     }
@@ -326,7 +404,7 @@ async fn step_up_start(State(state): State<AppState>, owner: Owner) -> AppResult
         .map_err(|e| AppError::Internal(e.into()))?;
     let ceremony_id = state.passkeys.put(Ceremony::StepUp {
         state: auth,
-        session: owner.token_hash().to_vec(),
+        session: user.token_hash().to_vec(),
     });
     Ok(Json(CeremonyStart {
         ceremony_id,
@@ -337,15 +415,35 @@ async fn step_up_start(State(state): State<AppState>, owner: Owner) -> AppResult
 /// Finish a passkey MFA step-up.
 #[utoipa::path(post, path = "/auth/passkey/step-up/finish", tag = "auth", operation_id = "passkey_step_up_finish", request_body = CeremonyFinish,
     responses((status = 200, body = MeResponse), (status = 401, body = crate::error::ErrorBody)))]
-async fn step_up_finish(State(state): State<AppState>, owner: Owner, Json(req): Json<CeremonyFinish>) -> AppResult<Json<MeResponse>> {
+async fn step_up_finish(
+    State(state): State<AppState>,
+    client: ClientInfo,
+    user: CurrentUser,
+    Json(req): Json<CeremonyFinish>,
+) -> AppResult<Json<MeResponse>> {
     let Ceremony::StepUp { state: auth, session } = state.passkeys.take(&req.ceremony_id)? else {
         return Err(AppError::BadRequest("wrong ceremony".into()));
     };
-    if session != owner.token_hash() {
+    if session != user.token_hash() {
         return Err(AppError::BadRequest("ceremony belongs to another session".into()));
     }
-    finish_auth(&state, &auth, req.credential).await?;
-    let fresh = mark_mfa(&state, owner).await?;
+    if let Err(e) = finish_auth(&state, user.id, &auth, req.credential).await {
+        state
+            .audit
+            .record(
+                user.event(Action::AuthStepUpFailed)
+                    .denied()
+                    .client(&client)
+                    .detail("method", "passkey"),
+            )
+            .await?;
+        return Err(e);
+    }
+    let fresh = mark_mfa(&state, user).await?;
+    state
+        .audit
+        .record(fresh.event(Action::AuthStepUp).client(&client).detail("method", "passkey"))
+        .await?;
     Ok(Json(me_response(&state, Some(&fresh)).await?))
 }
 

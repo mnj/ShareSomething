@@ -28,6 +28,7 @@ cargo clippy --all-targets         # must be warning-free
 cargo fmt                          # max_width = 140 (rustfmt.toml)
 SS_BASE_URL=http://localhost:5173 SS_DATA_DIR=./data cargo run      # dev server on :8080
 SS_DATA_DIR=./data cargo run -- admin init                         # create owner (password + TOTP)
+SS_DATA_DIR=./data cargo run -- audit verify                       # re-check the audit hash chain
 
 # Frontend (in frontend/)
 npm run dev                        # Vite on :5173, proxies /api to :8080
@@ -47,7 +48,8 @@ built from it and the API rejects non-GET requests whose `Origin` doesn't match 
 | `main.rs` | CLI (`serve`, `admin`, `openapi`, `healthcheck`) and server start-up |
 | `config.rs` | figment config: defaults < TOML file < `SS_*` env (`__` for nesting) |
 | `api.rs` | router assembly, OpenAPI doc, security headers, CSRF origin check |
-| `auth/owner.rs` | owner login, sessions (cookie `ss_owner`), TOTP step-up; `Owner` extractor |
+| `auth/users.rs` | users (single mode = user 1, admin), login, sessions (cookie `ss_session`), TOTP; `CurrentUser { id, role }` extractor |
+| `audit/` | hash-chained audit trail (`mod.rs`), API (`api.rs`), ECS/CEF/syslog formats (`format.rs`), SIEM shippers (`ship.rs`) |
 | `auth/passkey.rs` | owner WebAuthn passkeys (webauthn-rs): register, passwordless login, MFA step-up |
 | `auth/recipient.rs` | recipient session (cookie `ss_recipient`) with verified identities; email codes; `Recipient` extractor |
 | `auth/oidc.rs` | OIDC (discovery, PKCE, nonce, browser-bound state) and GitHub OAuth sign-in |
@@ -66,6 +68,15 @@ built from it and the API rejects non-GET requests whose `Origin` doesn't match 
 Migrations live in `backend/migrations/`. Add a new numbered file; never edit an applied one.
 
 ## Security invariants (don't break these)
+
+0. **Every security-relevant action is recorded with `state.audit.record(...)`**, and the error is
+   propagated with `?`: if auditing fails, the action fails. Never log share content, passphrases,
+   keys, tokens or codes in audit details. Add new actions to `audit::Action` (stable dotted names,
+   documented in `docs/audit.md`). Don't write to `audit_events` any other way. It's append-only
+   and hash-chained, and `audit verify` must keep passing.
+0b. **Ownership:** owner APIs only ever touch the caller's rows (`owner_id = user.id`; other users'
+   shares answer 404). The `owner` policy rule means *the share's* owner. Auditors are read-only
+   (`CurrentUser::can_share`).
 
 1. **Every recipient path goes through `policy::evaluate`.** Don't add an endpoint that returns
    share content or metadata (title, kind) without it. Hide details unless the decision is `Allow`.

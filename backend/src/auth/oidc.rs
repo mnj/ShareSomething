@@ -28,8 +28,10 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use super::recipient::{Recipient, add_identities};
 use crate::{
     app::AppState,
+    audit::{Action, Event},
     config::{OidcKind, OidcProviderConfig},
     error::{AppError, AppResult},
+    net::client_ip::ClientInfo,
     util::{now, random_token, sha256},
 };
 
@@ -221,6 +223,7 @@ fn with_error(next: &str, code: &str) -> String {
     responses((status = 303, description = "Back to the share")))]
 async fn callback(
     State(state): State<AppState>,
+    client: ClientInfo,
     Path(provider): Path<String>,
     Query(q): Query<CallbackQuery>,
     recipient: Recipient,
@@ -240,7 +243,24 @@ async fn callback(
     .bind(now())
     .fetch_optional(&state.db)
     .await?;
+    let method = format!("oidc:{provider}");
+    let failed = |reason: &str| {
+        Event::new(Action::RecipientVerifyFailed)
+            .denied()
+            .recipient(None)
+            .client(&client)
+            .detail("method", &method)
+            .detail("reason", reason)
+    };
     let Some((verifier, nonce, next)) = row.filter(|_| cookie_ok && !given.is_empty()) else {
+        state
+            .audit
+            .record(failed(if cookie_ok {
+                "unknown_or_expired_state"
+            } else {
+                "state_not_bound_to_browser"
+            }))
+            .await?;
         return Ok((jar, Redirect::to(&with_error("/", "expired"))).into_response());
     };
     if q.error.is_some() {
@@ -256,16 +276,25 @@ async fn callback(
     };
     match emails {
         Ok(emails) if !emails.is_empty() => {
-            let jar = add_identities(&state, jar, &recipient, &emails, &format!("oidc:{provider}")).await?;
-            tracing::info!(provider = %provider, emails = ?emails, "recipient signed in");
+            let jar = add_identities(&state, jar, &recipient, &emails, &method).await?;
+            state
+                .audit
+                .record(
+                    Event::new(Action::RecipientVerified)
+                        .recipient(Some(emails.join(",")))
+                        .client(&client)
+                        .detail("method", &method),
+                )
+                .await?;
             Ok((jar, Redirect::to(&next)).into_response())
         }
         Ok(_) => {
-            tracing::warn!(provider = %provider, "sign-in without a verified email");
+            state.audit.record(failed("no_verified_email")).await?;
             Ok((jar, Redirect::to(&with_error(&next, "no_verified_email"))).into_response())
         }
         Err(e) => {
             tracing::warn!(provider = %provider, error = %e, "sign-in failed");
+            state.audit.record(failed("provider_error").detail("error", e.to_string())).await?;
             Ok((jar, Redirect::to(&with_error(&next, "failed"))).into_response())
         }
     }

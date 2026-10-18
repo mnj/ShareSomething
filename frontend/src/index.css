@@ -518,3 +518,39 @@ span.note-error {
   width: 64px;
   padding: 2px 6px;
 }
+.audit-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+.scroll-x {
+  overflow-x: auto;
+  padding: 8px;
+}
+.audit-table {
+  display: table;
+  min-width: 860px;
+}
+.audit-table .details {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+}
+.mono {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.container.wide {
+  max-width: 1200px;
+}
+.user-label {
+  margin: 0 6px;
+}
+@media (max-width: 640px) {
+  .user-label {
+    display: none;
+  }
+}

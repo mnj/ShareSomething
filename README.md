@@ -62,6 +62,13 @@ Most "secret sharing" tools use one setting for everything. ShareSomething lets 
 - A dashboard with status, view counts and a per-share access log. You can edit, revoke or
   delete any share.
 
+**Audit and compliance**
+- A tamper-evident (hash-chained) audit trail of every sign-in, share action, open, refusal and export.
+- Admins and a read-only **auditor** role can filter it, verify it and export it (CSV/JSONL).
+- **SIEM streaming:** Splunk HEC, Elastic `_bulk`, syslog over TLS (CEF/JSON) for Sentinel, QRadar
+  and ArcSight, webhooks with HMAC, files and stdout. Delivery is at-least-once with per-shipper
+  cursors. See [docs/audit.md](docs/audit.md).
+
 **Operations**
 - A distroless image of about 22 MB with one `/data` volume.
 - Trusted-proxy-aware client IPs for cloudflared, Caddy, nginx and Traefik.

@@ -18,6 +18,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     app::AppState,
+    audit::{Action, Event},
     error::{AppError, AppResult},
     net::client_ip::ClientInfo,
     shares::{policy, policy::Identity, store},
@@ -183,11 +184,20 @@ async fn me(recipient: Recipient) -> Json<RecipientMe> {
 
 /// Forget all of the visitor's identities.
 #[utoipa::path(operation_id = "recipient_logout", post, path = "/recipient/logout", tag = "recipient", responses((status = 200, body = RecipientMe)))]
-async fn logout(State(state): State<AppState>, recipient: Recipient, jar: CookieJar) -> AppResult<(CookieJar, Json<RecipientMe>)> {
+async fn logout(
+    State(state): State<AppState>,
+    client: ClientInfo,
+    recipient: Recipient,
+    jar: CookieJar,
+) -> AppResult<(CookieJar, Json<RecipientMe>)> {
     if let Some(hash) = &recipient.session {
         sqlx::query("DELETE FROM recipient_sessions WHERE token_hash = ?")
             .bind(hash)
             .execute(&state.db)
+            .await?;
+        state
+            .audit
+            .record(Event::new(Action::RecipientSignedOut).recipient(recipient.label()).client(&client))
             .await?;
     }
     Ok((jar.remove(session_cookie(&state, String::new(), 0)), Json(me_of(&[]))))
@@ -236,11 +246,30 @@ async fn email_start(
         return Err(AppError::TooManyRequests);
     }
     let challenge_id = random_token();
-    if state.mailer.enabled()
-        && let Some(row) = store::by_slug(&state.db, &req.slug).await?
-        && row.ciphertext.is_some()
-        && policy::email_could_satisfy(&store::rules(&state.db, &row.id).await?, &email, "email_otp")
-    {
+    let share = store::by_slug(&state.db, &req.slug).await?;
+    let mut event = Event::new(Action::RecipientCodeRequested)
+        .recipient(Some(email.clone()))
+        .client(&client)
+        .detail("slug", &req.slug);
+    if let Some(row) = &share {
+        event = event.target("share", &row.id, Some(row.audit_label()));
+    }
+    let eligible = match &share {
+        Some(row) if state.mailer.enabled() && row.ciphertext.is_some() => {
+            policy::email_could_satisfy(&store::rules(&state.db, &row.id).await?, &email, "email_otp")
+        }
+        _ => false,
+    };
+    // Recorded for the SOC either way; the visitor always gets the same response.
+    state
+        .audit
+        .record(if eligible {
+            event.detail("sent", true)
+        } else {
+            event.denied().detail("sent", false)
+        })
+        .await?;
+    if eligible {
         let code = format!("{:06}", rand::rngs::OsRng.gen_range(0..1_000_000));
         sqlx::query("INSERT INTO email_challenges (id, email, code_hash, expires_at) VALUES (?, ?, ?, ?)")
             .bind(&challenge_id)
@@ -286,8 +315,20 @@ async fn email_verify(
     .bind(MAX_CODE_ATTEMPTS)
     .fetch_optional(&state.db)
     .await?;
-    let Some((email, stored)) = row else { return Err(invalid()) };
+    let failed = |email: Option<String>, reason: &str| {
+        Event::new(Action::RecipientVerifyFailed)
+            .denied()
+            .recipient(email)
+            .client(&client)
+            .detail("method", "email_otp")
+            .detail("reason", reason)
+    };
+    let Some((email, stored)) = row else {
+        state.audit.record(failed(None, "unknown_or_expired_challenge")).await?;
+        return Err(invalid());
+    };
     if !bool::from(code_hash(&req.challenge_id, &req.code).ct_eq(&stored)) {
+        state.audit.record(failed(Some(email), "wrong_code")).await?;
         return Err(invalid());
     }
     sqlx::query("DELETE FROM email_challenges WHERE id = ?")
@@ -295,7 +336,15 @@ async fn email_verify(
         .execute(&state.db)
         .await?;
     let jar = add_identities(&state, jar, &recipient, std::slice::from_ref(&email), "email_otp").await?;
-    tracing::info!(%email, "recipient verified by email code");
+    state
+        .audit
+        .record(
+            Event::new(Action::RecipientVerified)
+                .recipient(Some(email.clone()))
+                .client(&client)
+                .detail("method", "email_otp"),
+        )
+        .await?;
     let mut identities = recipient.identities;
     identities.push(Identity {
         email,

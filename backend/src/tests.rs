@@ -1,5 +1,7 @@
 //! End-to-end API tests against a real router and a temporary SQLite database.
 
+mod audit;
+
 use std::net::SocketAddr;
 
 use axum::{
@@ -15,7 +17,7 @@ use tower::ServiceExt;
 
 use crate::{
     app::AppState,
-    auth::{owner::hash_password, totp},
+    auth::{totp, users::hash_password},
     config::{Config, ProxyMode},
     crypto::MasterKey,
     util::now,
@@ -70,7 +72,7 @@ impl TestApp {
         f(&mut cfg);
         let db = crate::db::connect(&dir).await.unwrap();
         let totp_secret = totp::new_secret();
-        sqlx::query("INSERT INTO owner (id, password_hash, totp_secret, created_at) VALUES (1, ?, ?, ?)")
+        sqlx::query("INSERT INTO users (id, name, role, password_hash, totp_secret, created_at) VALUES (1, 'Owner', 'admin', ?, ?, ?)")
             .bind(hash_password(PASSWORD).unwrap())
             .bind(&totp_secret)
             .bind(now())
@@ -139,6 +141,29 @@ impl TestApp {
 
     async fn post(&self, uri: &str, body: Value, cookie: Option<&str>) -> Resp {
         self.req("POST", uri, Some(body), cookie, "198.51.100.1", &[]).await
+    }
+
+    /// Adds a password-only user (no TOTP) and returns its id.
+    async fn add_user(&self, email: &str, role: &str) -> i64 {
+        let (id,): (i64,) =
+            sqlx::query_as("INSERT INTO users (email, name, role, password_hash, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id")
+                .bind(email)
+                .bind(email.split('@').next().unwrap())
+                .bind(role)
+                .bind(hash_password(PASSWORD).unwrap())
+                .bind(now())
+                .fetch_one(&self.state.db)
+                .await
+                .unwrap();
+        id
+    }
+
+    async fn login_as(&self, email: &str) -> String {
+        let r = self
+            .post("/api/auth/login", json!({"email": email, "password": PASSWORD}), None)
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+        r.cookie.unwrap()
     }
 
     async fn login(&self) -> String {
@@ -406,7 +431,7 @@ async fn owner_only_with_mfa_step_up() {
     assert_eq!(r.body["payload"]["text"], "api key");
 
     // Age the step-up and check that a new one is demanded.
-    sqlx::query("UPDATE owner_sessions SET mfa_at = ?")
+    sqlx::query("UPDATE user_sessions SET mfa_at = ?")
         .bind(now() - 3600)
         .execute(&t.state.db)
         .await
@@ -1268,7 +1293,7 @@ mod passkeys {
         assert!(listed.body[0]["last_used_at"].is_i64(), "use is recorded");
 
         // Step-up after the MFA has gone stale.
-        sqlx::query("UPDATE owner_sessions SET mfa_at = ?")
+        sqlx::query("UPDATE user_sessions SET mfa_at = ?")
             .bind(now() - 3600)
             .execute(&t.state.db)
             .await
@@ -1324,7 +1349,7 @@ mod passkeys {
     async fn registering_needs_fresh_mfa() {
         let t = TestApp::new().await;
         let c = t.login().await;
-        sqlx::query("UPDATE owner_sessions SET mfa_at = NULL")
+        sqlx::query("UPDATE user_sessions SET mfa_at = NULL")
             .execute(&t.state.db)
             .await
             .unwrap();
@@ -1493,7 +1518,7 @@ async fn totp_setup_confirm_and_disable_from_ui() {
         .post("/api/auth/totp/confirm", json!({"code": totp::code_at(&secret, now())}), Some(&c))
         .await;
     assert_eq!(ok.status, StatusCode::OK, "{}", ok.body);
-    let (stored,): (Option<String>,) = sqlx::query_as("SELECT totp_secret FROM owner")
+    let (stored,): (Option<String>,) = sqlx::query_as("SELECT totp_secret FROM users")
         .fetch_one(&t.state.db)
         .await
         .unwrap();
@@ -1531,7 +1556,7 @@ async fn totp_setup_confirm_and_disable_from_ui() {
     assert_eq!(setup.status, StatusCode::OK, "no factor left, so no step-up needed");
     let code = totp::code_at(setup.body["secret"].as_str().unwrap(), now());
     t.post("/api/auth/totp/confirm", json!({"code": code}), Some(&c)).await;
-    sqlx::query("UPDATE owner_sessions SET mfa_at = 0")
+    sqlx::query("UPDATE user_sessions SET mfa_at = 0")
         .execute(&t.state.db)
         .await
         .unwrap();
