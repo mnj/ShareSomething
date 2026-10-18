@@ -122,6 +122,14 @@ Migrations live in `backend/migrations/`. Add a new numbered file; never edit an
     (`/files/{idx}/download`). E2E files are tried in this order: the File System Access API, then
     the service worker (`frontend/public/sw.js`, `/__download/<id>`, one chunk in flight), then a
     Blob. The service worker must only ever handle `/__download/` and cache nothing.
+17. **Share modes** (all evaluated server-side before content is released):
+    - **Time-lock** (`available_from`): checked *after* the access policy in `policy::evaluate`, so
+      people who aren't allowed in don't learn the unlock time.
+    - **Owner approval:** the approval gate runs after the passphrase check (typos never ping the
+      owner). An approval is bound to the requester by a secret, limited to `MAX_PENDING` per share,
+      and consumed in the same transaction as the view. Deciding needs a fresh MFA.
+    - **Split keys:** Shamir in the browser (`crypto/shamir.ts`). The server only stores
+      `{k, n, check}`, and the browser verifies the combined key against `check` *before* opening.
 
 ## Common tasks
 

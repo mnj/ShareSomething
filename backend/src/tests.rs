@@ -1,6 +1,7 @@
 //! End-to-end API tests against a real router and a temporary SQLite database.
 
 mod audit;
+mod modes;
 
 use std::net::SocketAddr;
 

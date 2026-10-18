@@ -28,7 +28,9 @@ pub fn api_router() -> OpenApiRouter<AppState> {
             .merge(shares::handlers::router())
             .merge(shares::files::router())
             .merge(shares::templates::router())
-            .merge(audit::api::router()),
+            .merge(audit::api::router())
+            .merge(shares::approvals::router())
+            .merge(crate::notify::router()),
     )
 }
 

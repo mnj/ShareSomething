@@ -10,6 +10,84 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/approvals": {
+      "get": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "Pending open requests for your shares.",
+        "operationId": "approvals_list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PendingApproval"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/approvals/{id}/decide": {
+      "post": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "Approve or deny a pending request. Needs a fresh MFA when you have a second factor.",
+        "operationId": "approvals_decide",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Decide"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/audit": {
       "get": {
         "tags": [
@@ -733,6 +811,47 @@
         }
       }
     },
+    "/api/auth/profile": {
+      "put": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Update your name, notification email or webhook.",
+        "operationId": "profile_update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/step-up": {
       "post": {
         "tags": [
@@ -870,6 +989,59 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/notifications": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Your latest notifications.",
+        "operationId": "notifications_list",
+        "parameters": [
+          {
+            "name": "unread",
+            "in": "query",
+            "description": "Only unread ones.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/notifications/read": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Mark all your notifications as read.",
+        "operationId": "notifications_read",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationList"
                 }
               }
             }
@@ -1953,7 +2125,8 @@
           "need_owner_login",
           "need_owner_mfa",
           "need_auth",
-          "denied"
+          "denied",
+          "not_yet"
         ]
       },
       "AuditPage": {
@@ -2058,6 +2231,14 @@
           "policy"
         ],
         "properties": {
+          "available_from": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Time-lock: content is only released from this unix time on."
+          },
           "ciphertext": {
             "type": [
               "string",
@@ -2107,6 +2288,10 @@
             "format": "int64",
             "description": "Destroy after this many successful opens (1 = read once)."
           },
+          "notify_on_open": {
+            "type": "boolean",
+            "description": "Notify the owner whenever the share is opened."
+          },
           "passphrase": {
             "type": [
               "string",
@@ -2146,11 +2331,26 @@
             "format": "int64",
             "description": "Link shares: open the target automatically after showing it for this many seconds (0-60)."
           },
+          "require_approval": {
+            "type": "boolean",
+            "description": "Every open waits for the owner to approve it."
+          },
           "require_owner_mfa": {
             "type": "boolean"
           },
           "slug": {
             "$ref": "#/components/schemas/SlugRequest"
+          },
+          "split": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SplitSpec",
+                "description": "E2E only: the key is split into `n` parts, `k` of which are needed (Shamir, in the browser)."
+              }
+            ]
           },
           "title": {
             "type": [
@@ -2201,6 +2401,17 @@
           },
           "value": {
             "type": "string"
+          }
+        }
+      },
+      "Decide": {
+        "type": "object",
+        "required": [
+          "approve"
+        ],
+        "properties": {
+          "approve": {
+            "type": "boolean"
           }
         }
       },
@@ -2260,6 +2471,20 @@
           "message"
         ],
         "properties": {
+          "approval_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`need_approval`: the pending approval to wait for."
+          },
+          "approval_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`need_approval`, first answer only: proves the waiting browser is the requester."
+          },
           "error": {
             "type": "string",
             "description": "Stable machine-readable code."
@@ -2469,9 +2694,82 @@
           }
         }
       },
+      "Notification": {
+        "type": "object",
+        "required": [
+          "id",
+          "ts",
+          "kind",
+          "message",
+          "read"
+        ],
+        "properties": {
+          "approval_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "share_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ts": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "NotificationList": {
+        "type": "object",
+        "required": [
+          "unread",
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Notification"
+            }
+          },
+          "unread": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "OpenRequest": {
         "type": "object",
         "properties": {
+          "approval_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Owner approval: the pending request from an earlier `need_approval` answer."
+          },
+          "approval_secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "passphrase": {
             "type": [
               "string",
@@ -2698,6 +2996,57 @@
           }
         }
       },
+      "PendingApproval": {
+        "type": "object",
+        "required": [
+          "id",
+          "share_id",
+          "share_label",
+          "ip",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "requester_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "share_id": {
+            "type": "string"
+          },
+          "share_label": {
+            "type": "string"
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "PolicyRule": {
         "allOf": [
           {
@@ -2772,6 +3121,31 @@
           },
           "url": {
             "type": "string"
+          }
+        }
+      },
+      "ProfileUpdate": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notification email. Single mode only (in team mode the email is the account identity)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notify_webhook": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "https webhook for notifications; empty string removes it."
           }
         }
       },
@@ -3061,7 +3435,8 @@
           "slug",
           "status",
           "auth_methods",
-          "passphrase_required"
+          "passphrase_required",
+          "require_approval"
         ],
         "properties": {
           "auth_methods": {
@@ -3070,6 +3445,14 @@
               "type": "string"
             },
             "description": "Acceptable sign-in methods when `status = need_auth` (empty = any)."
+          },
+          "available_from": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Time-lock: when the content becomes available (only shown once the policy allows the visitor)."
           },
           "enc_mode": {
             "oneOf": [
@@ -3120,8 +3503,23 @@
             "format": "int64",
             "description": "Link shares: open the target after this many seconds. The page may also open the share\nwithout a Reveal click, but only when it has no view limit and no passphrase."
           },
+          "require_approval": {
+            "type": "boolean",
+            "description": "Each open must be approved by the owner."
+          },
           "slug": {
             "type": "string"
+          },
+          "split": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Split key: `{k, n, check}`; the browser needs k key parts and verifies them with `check`.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "status": {
             "$ref": "#/components/schemas/AccessStatus"
@@ -3279,9 +3677,18 @@
           "status",
           "policy",
           "entropy_bits",
-          "upload_pending"
+          "upload_pending",
+          "require_approval",
+          "notify_on_open"
         ],
         "properties": {
+          "available_from": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
           "created_at": {
             "type": "integer",
             "format": "int64"
@@ -3318,6 +3725,9 @@
             ],
             "format": "int64"
           },
+          "notify_on_open": {
+            "type": "boolean"
+          },
           "passphrase_required": {
             "type": "boolean"
           },
@@ -3335,6 +3745,9 @@
             "format": "int64",
             "description": "Link shares: auto-redirect delay in seconds."
           },
+          "require_approval": {
+            "type": "boolean"
+          },
           "require_owner_mfa": {
             "type": "boolean"
           },
@@ -3343,6 +3756,21 @@
           },
           "slug_generator": {
             "type": "string"
+          },
+          "split_k": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Split key: k of n key parts needed."
+          },
+          "split_n": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           },
           "status": {
             "$ref": "#/components/schemas/ShareStatus"
@@ -3430,6 +3858,23 @@
           }
         }
       },
+      "SplitSpec": {
+        "type": "object",
+        "required": [
+          "k",
+          "n"
+        ],
+        "properties": {
+          "k": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "n": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "StepUpRequest": {
         "type": "object",
         "required": [
@@ -3493,6 +3938,14 @@
       "UpdateShareRequest": {
         "type": "object",
         "properties": {
+          "available_from": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix time the content becomes available; 0 removes the time-lock."
+          },
           "expires_at": {
             "type": [
               "integer",
@@ -3508,6 +3961,12 @@
             ],
             "format": "int64",
             "description": "0 removes the view limit."
+          },
+          "notify_on_open": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "policy": {
             "type": [
@@ -3525,6 +3984,12 @@
             ],
             "format": "int64",
             "description": "Link shares: seconds before auto-redirect (0-60); -1 turns redirecting off."
+          },
+          "require_approval": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "require_owner_mfa": {
             "type": [
@@ -3565,6 +4030,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "notify_webhook": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Webhook for notifications (Slack/Teams/Mattermost-compatible)."
           },
           "role": {
             "$ref": "#/components/schemas/Role"

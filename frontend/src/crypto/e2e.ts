@@ -13,6 +13,7 @@
  * so chunks can't be reordered, swapped between files or truncated unnoticed.
  */
 import { argon2id } from 'hash-wasm'
+import { combine, split, type Part } from './shamir'
 
 const AAD_CONTENT = new TextEncoder().encode('sharesomething/v1')
 const AAD_WRAP = new TextEncoder().encode('sharesomething/v1/wrap')
@@ -33,9 +34,11 @@ export interface KdfParams {
 export interface E2eMeta {
   v: 1
   alg: 'A256GCM'
-  key: 'fragment' | 'passphrase'
+  key: 'fragment' | 'passphrase' | 'split'
   kdf?: KdfParams
   wrapped_key?: string // base64 nonce || ciphertext
+  /** Split keys: k of n parts needed; `check` verifies the combined key before opening. */
+  split?: { k: number; n: number; check: string }
 }
 
 export const DEFAULT_KDF = { m: 64 * 1024, t: 3, p: 1 } as const
@@ -140,11 +143,15 @@ export async function encryptShare(payload: unknown, passphrase?: string, kdfCos
 }
 
 /** Recovers the content key from either the fragment key or the KEK derived from the passphrase. */
-export async function unwrapDek(meta: E2eMeta, secret: { fragmentKey?: string; kek?: Uint8Array<ArrayBuffer> }): Promise<Uint8Array<ArrayBuffer>> {
+export async function unwrapDek(meta: E2eMeta, secret: { fragmentKey?: string; kek?: Uint8Array<ArrayBuffer>; dek?: Uint8Array<ArrayBuffer> }): Promise<Uint8Array<ArrayBuffer>> {
   if (meta.v !== 1 || meta.alg !== 'A256GCM') throw new Error('Unsupported encryption format')
   if (meta.key === 'fragment') {
     if (!secret.fragmentKey) throw new Error('The link is missing its key (the part after #).')
     return fromB64(secret.fragmentKey)
+  }
+  if (meta.key === 'split') {
+    if (!secret.dek) throw new Error('Key parts are needed.')
+    return secret.dek
   }
   if (!secret.kek || !meta.wrapped_key) throw new Error('Passphrase required')
   return open(secret.kek, fromB64(meta.wrapped_key), AAD_WRAP)
@@ -156,7 +163,7 @@ export async function decryptPayload<T>(ciphertext: string, dek: Uint8Array<Arra
 }
 
 /** Decrypts with either the fragment key or the KEK derived from the passphrase. */
-export async function decryptShare<T>(ciphertext: string, meta: E2eMeta, secret: { fragmentKey?: string; kek?: Uint8Array<ArrayBuffer> }): Promise<T> {
+export async function decryptShare<T>(ciphertext: string, meta: E2eMeta, secret: { fragmentKey?: string; kek?: Uint8Array<ArrayBuffer>; dek?: Uint8Array<ArrayBuffer> }): Promise<T> {
   return decryptPayload<T>(ciphertext, await unwrapDek(meta, secret))
 }
 
@@ -176,6 +183,71 @@ export function encryptChunk(dek: Uint8Array<ArrayBuffer>, fileIdx: number, chun
 
 export function decryptChunk(dek: Uint8Array<ArrayBuffer>, fileIdx: number, chunk: number, last: boolean, data: Uint8Array<ArrayBuffer>) {
   return open(dek, data, chunkAad(fileIdx, chunk, last))
+}
+
+// --- split keys (k-of-n) ---------------------------------------------------------------
+
+const CHECK_LABEL = new TextEncoder().encode('sharesomething/v1/check')
+
+/** 8-byte fingerprint of the DEK. Public, so a browser can tell whether combined parts are right
+ *  before spending a view; 64 bits of a hash reveal nothing useful about a 256-bit key. */
+export async function keyCheck(dek: Uint8Array<ArrayBuffer>): Promise<string> {
+  const data = new Uint8Array(CHECK_LABEL.length + dek.length)
+  data.set(CHECK_LABEL)
+  data.set(dek, CHECK_LABEL.length)
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', data))
+  return Array.from(h.slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** A key part as a short code: `<x>.<base64url(y)>`. */
+export function partCode(p: Part): string {
+  return `${p.x}.${toB64Url(p.y)}`
+}
+
+/** Accepts a bare code or a full link containing `#p=<code>`. */
+export function parsePart(input: string): Part {
+  const raw = input.trim()
+  const code = raw.includes('#') ? (new URLSearchParams(raw.slice(raw.indexOf('#') + 1)).get('p') ?? '') : raw
+  const m = /^(\d{1,3})\.([A-Za-z0-9_-]{40,})$/.exec(code)
+  if (!m || Number(m[1]) < 1 || Number(m[1]) > 255) throw new Error('That is not a key part. Paste the link or code you were given.')
+  return { x: Number(m[1]), y: fromB64(m[2]) }
+}
+
+export interface SplitShare {
+  ciphertext: string
+  meta: E2eMeta
+  dek: Uint8Array<ArrayBuffer>
+  /** One code per key holder; put each in its own link as `#p=<code>`. */
+  parts: string[]
+}
+
+export async function encryptShareSplit(payload: unknown, k: number, n: number): Promise<SplitShare> {
+  const dek = random(32)
+  const ct = await seal(dek, new TextEncoder().encode(JSON.stringify(payload)), AAD_CONTENT)
+  return {
+    ciphertext: toB64(ct),
+    meta: { v: 1, alg: 'A256GCM', key: 'split', split: { k, n, check: await keyCheck(dek) } },
+    dek,
+    parts: split(dek, k, n).map(partCode),
+  }
+}
+
+/** Combines key parts into the DEK, verifying it against the published check value. */
+export async function dekFromParts(meta: Pick<E2eMeta, 'split'>, codes: string[]): Promise<Uint8Array<ArrayBuffer>> {
+  if (!meta.split) throw new Error('This share is not split.')
+  const parts = codes.map(parsePart)
+  if (new Set(parts.map((p) => p.x)).size !== parts.length) throw new Error('The same key part was entered twice.')
+  if (parts.length < meta.split.k) throw new Error(`${meta.split.k} key parts are needed.`)
+  const dek = combine(parts)
+  if (dek.length !== 32 || (await keyCheck(dek)) !== meta.split.check) {
+    throw new Error("These key parts don't belong together. Check that each one was copied completely.")
+  }
+  return dek
+}
+
+/** Reads a split-key part from a URL fragment like `#p=2.abc`. */
+export function partFromFragment(hash: string): string | undefined {
+  return new URLSearchParams(hash.replace(/^#/, '')).get('p') ?? undefined
 }
 
 /** Reads `k` from a URL fragment like `#k=abc`. */

@@ -195,6 +195,22 @@ pub struct CreateShareRequest {
     pub files: Option<Vec<FileSpec>>,
     /// Link shares: open the target automatically after showing it for this many seconds (0-60).
     pub redirect_secs: Option<i64>,
+    /// Time-lock: content is only released from this unix time on.
+    pub available_from: Option<i64>,
+    /// Every open waits for the owner to approve it.
+    #[serde(default)]
+    pub require_approval: bool,
+    /// Notify the owner whenever the share is opened.
+    #[serde(default)]
+    pub notify_on_open: bool,
+    /// E2E only: the key is split into `n` parts, `k` of which are needed (Shamir, in the browser).
+    pub split: Option<SplitSpec>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+pub struct SplitSpec {
+    pub k: i64,
+    pub n: i64,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -231,6 +247,10 @@ pub struct UpdateShareRequest {
     pub policy: Option<Vec<PolicyRule>>,
     /// Link shares: seconds before auto-redirect (0-60); -1 turns redirecting off.
     pub redirect_secs: Option<i64>,
+    /// Unix time the content becomes available; 0 removes the time-lock.
+    pub available_from: Option<i64>,
+    pub require_approval: Option<bool>,
+    pub notify_on_open: Option<bool>,
     /// Revoke now: content is wiped immediately.
     #[serde(default)]
     pub revoke: bool,
@@ -271,6 +291,12 @@ pub struct ShareSummary {
     pub upload_pending: bool,
     /// Link shares: auto-redirect delay in seconds.
     pub redirect_secs: Option<i64>,
+    pub available_from: Option<i64>,
+    pub require_approval: bool,
+    pub notify_on_open: bool,
+    /// Split key: k of n key parts needed.
+    pub split_k: Option<i64>,
+    pub split_n: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -282,6 +308,8 @@ pub enum AccessStatus {
     NeedOwnerMfa,
     NeedAuth,
     Denied,
+    /// Allowed, but time-locked (see `available_from`).
+    NotYet,
 }
 
 /// What a visitor learns before opening a share. Details are hidden unless access is allowed.
@@ -303,6 +331,13 @@ pub struct ShareInfo {
     /// Link shares: open the target after this many seconds. The page may also open the share
     /// without a Reveal click, but only when it has no view limit and no passphrase.
     pub redirect_secs: Option<i64>,
+    /// Time-lock: when the content becomes available (only shown once the policy allows the visitor).
+    pub available_from: Option<i64>,
+    /// Each open must be approved by the owner.
+    pub require_approval: bool,
+    /// Split key: `{k, n, check}`; the browser needs k key parts and verifies them with `check`.
+    #[schema(value_type = Option<std::collections::HashMap<String, Value>>)]
+    pub split: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -311,6 +346,9 @@ pub struct OpenRequest {
     pub passphrase: Option<String>,
     /// E2E mode passphrase verifier (base64).
     pub passphrase_verifier: Option<String>,
+    /// Owner approval: the pending request from an earlier `need_approval` answer.
+    pub approval_id: Option<String>,
+    pub approval_secret: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

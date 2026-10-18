@@ -44,6 +44,14 @@ Most "secret sharing" tools use one setting for everything. ShareSomething lets 
 - **Owner MFA per share:** require a fresh passkey or authenticator code to open a share.
 - **Saved policies:** store a rule set such as "Office network" and reuse it with one click.
 
+**Share modes**
+- **Owner approval:** each open waits until you approve it live, notified in-app, by email or by
+  a Slack/Teams webhook. Good for break-glass credentials.
+- **Time-lock:** nothing is released before a chosen time, e.g. a handover on someone's start date.
+- **Split key (k-of-n):** the key is split between key holders in the browser (Shamir). Any k of
+  them together can open it, and neither one person alone nor the server can.
+- **Notify on open:** know when (and from where) a share was opened.
+
 **Content types**
 - Text, links, multi-field credentials (secret fields masked) and files.
 - **Files:** drag & drop several. They're encrypted in 1 MiB chunks and stream to disk on

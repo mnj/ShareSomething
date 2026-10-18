@@ -7,7 +7,7 @@ import { CopyButton } from '../components/CopyButton'
 import { ErrorNote } from '../components/ErrorNote'
 import { MfaPrompt } from '../components/MfaPrompt'
 import { RecipientBar, RecipientSignIn } from '../components/RecipientSignIn'
-import { decryptPayload, derivePassphraseKeys, keyFromFragment, toB64, unwrapDek, type E2eMeta, type KdfParams } from '../crypto/e2e'
+import { decryptPayload, dekFromParts, derivePassphraseKeys, keyFromFragment, partFromFragment, toB64, unwrapDek, type E2eMeta, type KdfParams } from '../crypto/e2e'
 import {
   canSaveToDisk,
   canSaveToFolder,
@@ -41,6 +41,7 @@ export function ShareView() {
   const { slug = '' } = useParams()
   // After an OIDC round trip the fragment is gone; the key was parked in sessionStorage.
   const [fragmentKey] = useState(() => keyFromFragment(window.location.hash) ?? readStashedKey(slug))
+  const [splitPart] = useState(() => partFromFragment(window.location.hash))
   const [params] = useSearchParams()
   const [authError] = useState(() => params.get('auth_error'))
   const recipient = useRecipient()
@@ -80,7 +81,7 @@ export function ShareView() {
     <div className="stack">
       {authError && <p className="note note-error narrow">{AUTH_ERRORS[authError] ?? AUTH_ERRORS.failed}</p>}
       {bar}
-      <Gate info={info.data} fragmentKey={fragmentKey} onRevealed={setRevealed} />
+      <Gate info={info.data} fragmentKey={fragmentKey} splitPart={splitPart} onRevealed={setRevealed} />
     </div>
   )
 }
@@ -94,26 +95,83 @@ function Notice({ title, children }: { title: string; children: React.ReactNode 
   )
 }
 
-function Gate({ info, fragmentKey, onRevealed }: { info: ShareInfo; fragmentKey?: string; onRevealed: (r: Revealed) => void }) {
+interface ApprovalTicket {
+  id: string
+  secret: string
+}
+
+const approvalKey = (slug: string) => `ss_appr:${slug}`
+
+function loadTicket(slug: string): ApprovalTicket | null {
+  try {
+    const raw = sessionStorage.getItem(approvalKey(slug))
+    return raw ? (JSON.parse(raw) as ApprovalTicket) : null
+  } catch {
+    return null
+  }
+}
+
+function saveTicket(slug: string, t: ApprovalTicket | null) {
+  try {
+    if (t) sessionStorage.setItem(approvalKey(slug), JSON.stringify(t))
+    else sessionStorage.removeItem(approvalKey(slug))
+  } catch {
+    // ignore: approval then only lasts for this page view
+  }
+}
+
+interface SplitMeta {
+  k: number
+  n: number
+  check: string
+}
+
+function Gate({ info, fragmentKey, splitPart, onRevealed }: { info: ShareInfo; fragmentKey?: string; splitPart?: string; onRevealed: (r: Revealed) => void }) {
   const qc = useQueryClient()
   const [passphrase, setPassphrase] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
+  const [ticket, setTicket] = useState<ApprovalTicket | null>(() => loadTicket(info.slug))
+  const [waiting, setWaiting] = useState(false)
+  const split = (info.split ?? null) as unknown as SplitMeta | null
+  const [extraParts, setExtraParts] = useState<string[]>(() => Array(split ? Math.max(0, split.k - (splitPart ? 1 : 0)) : 0).fill(''))
   const refresh = () => qc.invalidateQueries({ queryKey: ['share-info', info.slug] })
   const next = encodeURIComponent(location.pathname)
-  const e2eFragmentMissing = info.enc_mode === 'e2e' && !info.passphrase_required && !fragmentKey
-  const reveal = async () => {
+  const e2eFragmentMissing = info.enc_mode === 'e2e' && !info.passphrase_required && !split && !fragmentKey
+  const reveal = async (quiet = false) => {
+    if (busy) return
     setBusy(true)
-    setError(null)
+    if (!quiet) setError(null)
     try {
-      onRevealed(await openShare(info, passphrase, fragmentKey))
+      // Split keys are combined and checked *before* opening, so a wrong part never spends a view.
+      const dek = split ? await dekFromParts({ split }, [splitPart, ...extraParts].filter((p): p is string => !!p?.trim())) : undefined
+      onRevealed(await openShare(info, passphrase, fragmentKey, { ticket, dek }))
+      saveTicket(info.slug, null)
     } catch (err) {
-      setError(err)
-      if (err instanceof ApiError && err.status === 404) refresh()
+      if (err instanceof ApiError && err.code === 'need_approval' && err.body.approval_id) {
+        const t = { id: err.body.approval_id, secret: err.body.approval_secret ?? ticket?.secret ?? '' }
+        setTicket(t)
+        saveTicket(info.slug, t)
+        setWaiting(true)
+      } else {
+        if (err instanceof ApiError && ['approval_denied', 'approval_expired'].includes(err.code)) {
+          setTicket(null)
+          saveTicket(info.slug, null)
+        }
+        setWaiting(false)
+        setError(err)
+        if (err instanceof ApiError && err.status === 404) refresh()
+      }
     } finally {
       setBusy(false)
     }
   }
+  // While waiting for the owner, retry quietly.
+  useEffect(() => {
+    if (!waiting) return
+    const t = setInterval(() => void reveal(true), 3000)
+    return () => clearInterval(t)
+  })
 
   // Redirect links open without a click, but only when that can't burn anything: no view limit
   // (mail scanners run JavaScript too) and nothing to type in.
@@ -147,6 +205,29 @@ function Gate({ info, fragmentKey, onRevealed }: { info: ShareInfo; fragmentKey?
           </MfaPrompt>
         </section>
       )
+    case 'not_yet':
+      return <TimeLock info={info} onReady={refresh} />
+  }
+
+  if (waiting) {
+    return (
+      <section className="card stack narrow" aria-live="polite">
+        <h1>Waiting for approval</h1>
+        <p>The owner has been asked to approve this. Keep this page open; it opens by itself once they say yes.</p>
+        <progress className="progress" aria-label="Waiting for approval" />
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => {
+            setWaiting(false)
+            setTicket(null)
+            saveTicket(info.slug, null)
+          }}
+        >
+          Cancel
+        </button>
+      </section>
+    )
   }
 
 
@@ -155,7 +236,7 @@ function Gate({ info, fragmentKey, onRevealed }: { info: ShareInfo; fragmentKey?
       className="card stack narrow"
       onSubmit={(e) => {
         e.preventDefault()
-        reveal()
+        void reveal()
       }}
     >
       <h1>{info.title || 'Someone shared something with you'}</h1>
@@ -165,6 +246,28 @@ function Gate({ info, fragmentKey, onRevealed }: { info: ShareInfo; fragmentKey?
       </p>
       {info.views_left === 1 && <p className="note note-warn">This can be opened only once. After you reveal it, it is destroyed.</p>}
       {info.views_left != null && info.views_left > 1 && <p className="note">Can be opened {info.views_left} more times.</p>}
+      {info.require_approval && <p className="note">The owner approves each opening. They'll be asked when you click Reveal.</p>}
+      {split && (
+        <div className="stack">
+          <p className="note">
+            This share is protected by a split key: {split.k} of {split.n} key holders must combine their parts.
+            {splitPart ? ` Your link holds one part; enter ${split.k - 1} more.` : ` Enter ${split.k} key parts.`}
+          </p>
+          {extraParts.map((v, i) => (
+            <label key={i} className="field">
+              Key part from another key holder
+              <input
+                value={v}
+                onChange={(e) => setExtraParts(extraParts.map((x, j) => (j === i ? e.target.value : x)))}
+                placeholder="Paste their link or key code"
+                spellCheck={false}
+                autoComplete="off"
+                required
+              />
+            </label>
+          ))}
+        </div>
+      )}
       {e2eFragmentMissing ? (
         <p className="note note-error">This link is incomplete: it's missing the key after "#". Ask the sender for the full link.</p>
       ) : (
@@ -189,7 +292,36 @@ function kindLabel(kind?: Schemas['ShareKind'] | null) {
   return kind === 'link' ? 'Link' : kind === 'credential' ? 'Credential' : kind === 'files' ? 'Files' : 'Text'
 }
 
-async function openShare(info: ShareInfo, passphrase: string, fragmentKey?: string): Promise<Revealed> {
+function TimeLock({ info, onReady }: { info: ShareInfo; onReady: () => void }) {
+  const at = info.available_from ?? 0
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const wait = at * 1000 - Date.now()
+    if (wait <= 0) return onReady()
+    // Re-render every second for the countdown; refresh once the time has come.
+    const t = setTimeout(onReady, Math.min(wait + 500, 2 ** 31 - 1))
+    const i = setInterval(() => tick((n) => n + 1), 1000)
+    return () => {
+      clearTimeout(t)
+      clearInterval(i)
+    }
+  }, [at, onReady])
+  return (
+    <section className="card stack narrow">
+      <h1>{info.title || 'Not available yet'}</h1>
+      <p>
+        This share unlocks <b>{formatRelative(at)}</b> ({new Date(at * 1000).toLocaleString()}). Keep this page open, or come back then.
+      </p>
+    </section>
+  )
+}
+
+async function openShare(
+  info: ShareInfo,
+  passphrase: string,
+  fragmentKey: string | undefined,
+  opts: { ticket?: ApprovalTicket | null; dek?: Uint8Array<ArrayBuffer> } = {},
+): Promise<Revealed> {
   let verifier: string | null = null
   let kek: Uint8Array<ArrayBuffer> | undefined
   if (info.enc_mode === 'e2e' && info.passphrase_required) {
@@ -197,14 +329,15 @@ async function openShare(info: ShareInfo, passphrase: string, fragmentKey?: stri
     verifier = toB64(keys.verifier)
     kek = keys.kek
   }
-  const body = info.enc_mode === 'server' ? { passphrase: passphrase || null } : { passphrase_verifier: verifier }
+  const approval = { approval_id: opts.ticket?.id ?? null, approval_secret: opts.ticket?.secret ?? null }
+  const body = info.enc_mode === 'server' ? { passphrase: passphrase || null, ...approval } : { passphrase_verifier: verifier, ...approval }
   const res = await unwrap(api.POST('/api/s/{slug}/open', { params: { path: { slug: info.slug } }, body }))
   let payload: SharePayload
   let dek: Uint8Array<ArrayBuffer> | undefined
   if (res.enc_mode === 'server') {
     payload = res.payload!
   } else {
-    dek = await unwrapDek(res.enc_meta as unknown as E2eMeta, { fragmentKey, kek })
+    dek = await unwrapDek(res.enc_meta as unknown as E2eMeta, { fragmentKey, kek, dek: opts.dek })
     payload = await decryptPayload<SharePayload>(res.ciphertext!, dek)
   }
   const download = res.download_token ? { token: res.download_token, expiresAt: res.download_expires_at ?? 0, dek } : undefined

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, unwrap, type ShareSummary } from '../api/client'
+import { Notifications, PendingApprovals } from '../components/Approvals'
 import { CopyButton } from '../components/CopyButton'
 import { EditShare } from '../components/EditShare'
 import { ErrorNote } from '../components/ErrorNote'
@@ -31,6 +32,8 @@ export function Dashboard() {
           </button>
         ))}
       </div>
+      <PendingApprovals />
+      <Notifications />
       <ErrorNote error={shares.error} />
       {shares.isPending && <p className="hint">Loading…</p>}
       {shares.data && list.length === 0 && <p className="hint">Nothing here yet.</p>}
@@ -70,6 +73,10 @@ function ShareItem({ s }: { s: ShareSummary }) {
           {s.passphrase_required && <span className="badge">passphrase</span>}
           {s.require_owner_mfa && <span className="badge">MFA</span>}
           {s.redirect_secs != null && <span className="badge">redirect {s.redirect_secs}s</span>}
+          {s.available_from != null && <span className="badge">time-lock {formatRelative(s.available_from)}</span>}
+          {s.require_approval && <span className="badge">approval</span>}
+          {s.notify_on_open && <span className="badge">notify</span>}
+          {s.split_k != null && <span className="badge">split {s.split_k}-of-{s.split_n}</span>}
         </div>
         <div className="row">
           {active && (

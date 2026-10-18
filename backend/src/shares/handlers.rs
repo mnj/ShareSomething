@@ -11,6 +11,7 @@ use subtle::ConstantTimeEq;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::{
+    approvals,
     model::*,
     policy::{self, AccessContext, Decision, PolicyRule, Rule, RuleGroup, UserCtx},
     store::{self, ShareRow, Wipe},
@@ -26,6 +27,7 @@ use crate::{
     crypto::{self, CryptoError, ServerMeta},
     error::{AppError, AppResult},
     net::client_ip::ClientInfo,
+    notify,
     slug::GeneratorInfo,
     util::{now, random_token, sha256},
 };
@@ -72,6 +74,11 @@ fn summary(state: &AppState, row: &ShareRow, policy: Vec<PolicyRule>) -> ShareSu
         entropy_bits: state.slugs.get(&row.slug_generator).map(|g| g.entropy_bits(&opts)).unwrap_or(0.0),
         upload_pending: row.upload_pending,
         redirect_secs: row.redirect_secs,
+        available_from: row.available_from,
+        require_approval: row.require_approval,
+        notify_on_open: row.notify_on_open,
+        split_k: row.split_k,
+        split_n: row.split_n,
     }
 }
 
@@ -88,6 +95,31 @@ fn validate_redirect(kind: ShareKind, secs: Option<i64>, allow_off: bool) -> App
             "redirect delay must be 0-{MAX_REDIRECT_SECS} seconds"
         ))),
     }
+}
+
+/// Split keys are combined in the browser, so they only exist for E2E shares, and the metadata the
+/// browser needs (k, n and a key check value) must be there and consistent.
+fn validate_split(split: SplitSpec, mode: EncMode, meta: &Option<Value>, passphrase: bool) -> AppResult<()> {
+    if mode != EncMode::E2e || passphrase {
+        return Err(AppError::BadRequest(
+            "split keys need end-to-end encryption without a passphrase".into(),
+        ));
+    }
+    if !(2..=10).contains(&split.n) || !(2..=split.n).contains(&split.k) {
+        return Err(AppError::BadRequest("split keys need 2 <= k <= n <= 10".into()));
+    }
+    let m = meta.as_ref().and_then(|m| m.get("split"));
+    let ok = m.is_some_and(|m| {
+        m.get("k").and_then(Value::as_i64) == Some(split.k)
+            && m.get("n").and_then(Value::as_i64) == Some(split.n)
+            && m.get("check").and_then(Value::as_str).is_some_and(|c| (8..=64).contains(&c.len()))
+    });
+    if !ok {
+        return Err(AppError::BadRequest(
+            "enc_meta.split must match k and n and carry a key check".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Checks declared file sizes against the configured limits.
@@ -213,6 +245,17 @@ async fn create_share(
     let title = validate_title(req.title)?;
     let file_sizes = validate_file_specs(&state, req.kind, req.files.as_deref())?;
     validate_redirect(req.kind, req.redirect_secs, false)?;
+    if let Some(at) = req.available_from {
+        let until = req.expires_in_secs.map(|s| now() + s);
+        if at > now() + MAX_EXPIRY_SECS || until.is_some_and(|u| at >= u) {
+            return Err(AppError::BadRequest(
+                "the share must unlock before it expires (and within a year)".into(),
+            ));
+        }
+    }
+    if let Some(split) = req.split {
+        validate_split(split, req.enc_mode, &req.enc_meta, req.passphrase_verifier.is_some())?;
+    }
     let rules = validate_policy(&state, req.policy)?;
     validate_mfa_toggle(&state, &user, req.require_owner_mfa).await?;
     if req.max_views.is_some_and(|m| !(1..=MAX_VIEWS).contains(&m)) {
@@ -318,8 +361,9 @@ async fn create_share(
         let res = sqlx::query(
             "INSERT INTO shares (id, slug, slug_generator, slug_opts, kind, title, enc_mode, enc_meta, ciphertext,
                 passphrase_required, passphrase_verifier, require_owner_mfa, max_views, expires_at, created_at,
-                upload_pending, upload_dek, upload_token_hash, redirect_secs, owner_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                upload_pending, upload_dek, upload_token_hash, redirect_secs, owner_id,
+                available_from, require_approval, notify_on_open, split_k, split_n)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&candidate)
@@ -341,6 +385,11 @@ async fn create_share(
         .bind(upload_token.as_deref().map(|t| sha256(t.as_bytes())))
         .bind(req.redirect_secs)
         .bind(user.id)
+        .bind(req.available_from)
+        .bind(req.require_approval)
+        .bind(req.notify_on_open)
+        .bind(req.split.map(|s| s.k))
+        .bind(req.split.map(|s| s.n))
         .execute(&mut *tx)
         .await;
         match res {
@@ -393,6 +442,9 @@ async fn create_share(
                 .detail("expires_at", row.expires_at)
                 .detail("passphrase", row.passphrase_required)
                 .detail("require_owner_mfa", row.require_owner_mfa)
+                .detail("available_from", row.available_from)
+                .detail("require_approval", row.require_approval)
+                .detail("split", row.split_k.zip(row.split_n).map(|(k, n)| format!("{k}-of-{n}")))
                 .detail("policy", &rules),
         )
         .await?;
@@ -440,7 +492,13 @@ async fn update_share(
         || req.max_views.is_some()
         || req.require_owner_mfa.is_some()
         || req.redirect_secs.is_some()
+        || req.available_from.is_some()
+        || req.require_approval.is_some()
+        || req.notify_on_open.is_some()
         || policy.is_some();
+    if req.available_from.is_some_and(|t| t != 0 && t > now() + MAX_EXPIRY_SECS) {
+        return Err(AppError::BadRequest("the time-lock can be at most a year ahead".into()));
+    }
     if edits && (row.ciphertext.is_none() || row.revoked_at.is_some() || row.burned_at.is_some()) {
         return Err(AppError::Conflict("this share's content is gone; it can't be changed".into()));
     }
@@ -467,6 +525,9 @@ async fn update_share(
         ("max_views", req.max_views.is_some()),
         ("require_owner_mfa", req.require_owner_mfa.is_some()),
         ("redirect_secs", req.redirect_secs.is_some()),
+        ("available_from", req.available_from.is_some()),
+        ("require_approval", req.require_approval.is_some()),
+        ("notify_on_open", req.notify_on_open.is_some()),
         ("policy", policy.is_some()),
     ] {
         if set {
@@ -498,6 +559,27 @@ async fn update_share(
     if let Some(m) = req.require_owner_mfa {
         sqlx::query("UPDATE shares SET require_owner_mfa = ? WHERE id = ?")
             .bind(m)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(t) = req.available_from {
+        sqlx::query("UPDATE shares SET available_from = ? WHERE id = ?")
+            .bind((t != 0).then_some(t))
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(v) = req.require_approval {
+        sqlx::query("UPDATE shares SET require_approval = ? WHERE id = ?")
+            .bind(v)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(v) = req.notify_on_open {
+        sqlx::query("UPDATE shares SET notify_on_open = ? WHERE id = ?")
+            .bind(v)
             .bind(&id)
             .execute(&mut *tx)
             .await?;
@@ -642,6 +724,7 @@ fn decision_reason(d: &Decision) -> &'static str {
         Decision::NeedOwnerLogin => "owner_login_required",
         Decision::NeedOwnerMfa => "owner_mfa_required",
         Decision::NeedRecipientAuth(_) => "sign_in_required",
+        Decision::NotYet(_) => "time_locked",
     }
 }
 
@@ -662,6 +745,12 @@ fn public_kdf(row: &ShareRow) -> Option<Value> {
     serde_json::from_str::<Value>(&row.enc_meta).ok()?.get("kdf").cloned()
 }
 
+/// Split-key parameters the browser needs before opening: k, n and the key check value.
+fn public_split(row: &ShareRow) -> Option<Value> {
+    row.split_k?;
+    serde_json::from_str::<Value>(&row.enc_meta).ok()?.get("split").cloned()
+}
+
 fn decision_error(d: &Decision) -> AppError {
     match d {
         Decision::Allow => unreachable!(),
@@ -670,6 +759,10 @@ fn decision_error(d: &Decision) -> AppError {
         Decision::NeedOwnerLogin => AppError::Access("need_owner_login", "sign in as the owner to open this share".into()),
         Decision::NeedOwnerMfa => AppError::Access("need_owner_mfa", "confirm your authenticator code to open this share".into()),
         Decision::NeedRecipientAuth(_) => AppError::Access("need_auth", "sign in to open this share".into()),
+        Decision::NotYet(at) => AppError::Access(
+            "not_yet",
+            format!("this share is available from {}", crate::audit::format::rfc3339(*at)),
+        ),
     }
 }
 
@@ -697,9 +790,11 @@ async fn share_info(
         Decision::Denied => (AccessStatus::Denied, vec![]),
         Decision::NeedOwnerLogin => (AccessStatus::NeedOwnerLogin, vec![]),
         Decision::NeedOwnerMfa => (AccessStatus::NeedOwnerMfa, vec![]),
+        Decision::NotYet(_) => (AccessStatus::NotYet, vec![]),
         Decision::NeedRecipientAuth(m) => (AccessStatus::NeedAuth, offered_methods(&state, m)),
     };
-    let visible = decision == Decision::Allow;
+    // Allowed visitors may see details, also while the share is still time-locked.
+    let visible = matches!(decision, Decision::Allow | Decision::NotYet(_));
     Ok(Json(ShareInfo {
         slug: row.slug.clone(),
         status,
@@ -712,6 +807,9 @@ async fn share_info(
         views_left: if visible { row.views_left() } else { None },
         expires_at: if visible { row.expires_at } else { None },
         redirect_secs: if visible { row.redirect_secs } else { None },
+        available_from: if visible { row.available_from } else { None },
+        require_approval: visible && row.require_approval,
+        split: if visible { public_split(&row) } else { None },
     }))
 }
 
@@ -786,7 +884,7 @@ async fn open_share(
     // Check the passphrase (and decrypt server-side content) before spending a view.
     let (payload, dek) = match row.enc_mode() {
         EncMode::Server => {
-            let pw = req.passphrase.filter(|p| !p.is_empty());
+            let pw = req.passphrase.clone().filter(|p| !p.is_empty());
             if row.passphrase_required && pw.is_none() {
                 return Err(AppError::Access("need_passphrase", "this share needs a passphrase".into()));
             }
@@ -820,7 +918,24 @@ async fn open_share(
         }
     };
 
+    // Owner approval comes after the passphrase check, so typos never bother the owner.
+    let approval = if row.require_approval {
+        let label = user.as_ref().map(|u| u.label.clone()).or_else(|| recipient.label());
+        let event = visitor(row.event(Action::ShareApprovalRequested), &client, user.as_ref(), &recipient);
+        Some(approvals::gate(&state, &row, &req, &client, label, event).await?)
+    } else {
+        None
+    };
+
     let mut tx = state.db.begin().await?;
+    if let Some(id) = &approval
+        && !approvals::consume(&mut tx, id).await?
+    {
+        return Err(AppError::Access(
+            "approval_expired",
+            "the approval expired or was already used; ask again".into(),
+        ));
+    }
     let Some(views) = store::consume_view(&mut tx, &row.id).await? else {
         return Err(AppError::NotFound);
     };
@@ -850,9 +965,33 @@ async fn open_share(
             visitor(row.event(Action::ShareOpened), &client, user.as_ref(), &recipient)
                 .detail("burned", burned)
                 .detail("views", views)
-                .detail("max_views", row.max_views),
+                .detail("max_views", row.max_views)
+                .detail("approval_id", &approval),
         )
         .await?;
+    if row.notify_on_open {
+        let who = user
+            .as_ref()
+            .map(|u| u.label.clone())
+            .or_else(|| recipient.label())
+            .unwrap_or_else(|| "Someone".into());
+        let place = client
+            .country
+            .as_ref()
+            .map(|c| format!("{} ({c})", client.ip))
+            .unwrap_or_else(|| client.ip.to_string());
+        let note = if burned { " It has now been destroyed." } else { "" };
+        notify::notify(
+            &state,
+            row.owner_id,
+            notify::Kind::ShareOpened,
+            Some(&row.id),
+            None,
+            &format!("\"{}\" was opened", row.audit_label()),
+            &format!("{who} opened \"{}\" from {place}.{note}", row.audit_label()),
+        )
+        .await?;
+    }
 
     let e2e = row.enc_mode() == EncMode::E2e;
     Ok(Json(OpenResponse {

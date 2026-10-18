@@ -4,6 +4,40 @@
  */
 
 export interface paths {
+    "/api/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pending open requests for your shares. */
+        get: operations["approvals_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/approvals/{id}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve or deny a pending request. Needs a fresh MFA when you have a second factor. */
+        post: operations["approvals_decide"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/audit": {
         parameters: {
             query?: never;
@@ -259,6 +293,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update your name, notification email or webhook. */
+        put: operations["profile_update"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/step-up": {
         parameters: {
             query?: never;
@@ -321,6 +372,40 @@ export interface paths {
         put?: never;
         /** Start (re)configuring the authenticator app. Needs a fresh MFA if a second factor exists. */
         post: operations["totp_setup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Your latest notifications. */
+        get: operations["notifications_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark all your notifications as read. */
+        post: operations["notifications_read"];
         delete?: never;
         options?: never;
         head?: never;
@@ -701,7 +786,7 @@ export interface components {
             user_agent?: string | null;
         };
         /** @enum {string} */
-        AccessStatus: "ready" | "need_passphrase" | "need_owner_login" | "need_owner_mfa" | "need_auth" | "denied";
+        AccessStatus: "ready" | "need_passphrase" | "need_owner_login" | "need_owner_mfa" | "need_auth" | "denied" | "not_yet";
         AuditPage: {
             events: components["schemas"]["Record"][];
             /**
@@ -734,6 +819,11 @@ export interface components {
             value: string;
         };
         CreateShareRequest: {
+            /**
+             * Format: int64
+             * @description Time-lock: content is only released from this unix time on.
+             */
+            available_from?: number | null;
             /** @description E2E mode: base64 ciphertext (nonce || AES-GCM ciphertext of the payload JSON). */
             ciphertext?: string | null;
             /** @description E2E mode: client encryption metadata (algorithm, KDF params, wrapped key). */
@@ -751,6 +841,8 @@ export interface components {
              * @description Destroy after this many successful opens (1 = read once).
              */
             max_views?: number | null;
+            /** @description Notify the owner whenever the share is opened. */
+            notify_on_open?: boolean;
             /** @description Server mode: optional passphrase mixed into the key. */
             passphrase?: string | null;
             /** @description E2E mode with passphrase: base64 verifier derived from the passphrase. */
@@ -762,8 +854,11 @@ export interface components {
              * @description Link shares: open the target automatically after showing it for this many seconds (0-60).
              */
             redirect_secs?: number | null;
+            /** @description Every open waits for the owner to approve it. */
+            require_approval?: boolean;
             require_owner_mfa?: boolean;
             slug: components["schemas"]["SlugRequest"];
+            split?: null | components["schemas"]["SplitSpec"];
             title?: string | null;
         };
         CreateShareResponse: {
@@ -777,6 +872,9 @@ export interface components {
             /** @description Masked until revealed in the UI. */
             secret?: boolean;
             value: string;
+        };
+        Decide: {
+            approve: boolean;
         };
         EmailStartRequest: {
             email: string;
@@ -793,6 +891,10 @@ export interface components {
         /** @enum {string} */
         EncMode: "e2e" | "server";
         ErrorBody: {
+            /** @description `need_approval`: the pending approval to wait for. */
+            approval_id?: string | null;
+            /** @description `need_approval`, first answer only: proves the waiting browser is the requester. */
+            approval_secret?: string | null;
             /** @description Stable machine-readable code. */
             error: string;
             message: string;
@@ -862,7 +964,26 @@ export interface components {
             totp_enabled: boolean;
             user?: null | components["schemas"]["UserInfo"];
         };
+        Notification: {
+            approval_id?: string | null;
+            /** Format: int64 */
+            id: number;
+            kind: string;
+            message: string;
+            read: boolean;
+            share_id?: string | null;
+            /** Format: int64 */
+            ts: number;
+        };
+        NotificationList: {
+            items: components["schemas"]["Notification"][];
+            /** Format: int64 */
+            unread: number;
+        };
         OpenRequest: {
+            /** @description Owner approval: the pending request from an earlier `need_approval` answer. */
+            approval_id?: string | null;
+            approval_secret?: string | null;
             /** @description Server mode passphrase. */
             passphrase?: string | null;
             /** @description E2E mode passphrase verifier (base64). */
@@ -922,6 +1043,19 @@ export interface components {
             last_used_at?: number | null;
             name: string;
         };
+        PendingApproval: {
+            country?: string | null;
+            /** Format: int64 */
+            created_at: number;
+            /** Format: int64 */
+            expires_at: number;
+            id: string;
+            ip: string;
+            requester_label?: string | null;
+            share_id: string;
+            share_label: string;
+            user_agent?: string | null;
+        };
         PolicyRule: components["schemas"]["Rule"] & {
             group: components["schemas"]["RuleGroup"];
         };
@@ -942,6 +1076,13 @@ export interface components {
             entropy_bits: number;
             slug: string;
             url: string;
+        };
+        ProfileUpdate: {
+            /** @description Notification email. Single mode only (in team mode the email is the account identity). */
+            email?: string | null;
+            name?: string | null;
+            /** @description https webhook for notifications; empty string removes it. */
+            notify_webhook?: string | null;
         };
         RecipientMe: {
             identities: components["schemas"]["IdentityInfo"][];
@@ -1008,6 +1149,11 @@ export interface components {
         ShareInfo: {
             /** @description Acceptable sign-in methods when `status = need_auth` (empty = any). */
             auth_methods: string[];
+            /**
+             * Format: int64
+             * @description Time-lock: when the content becomes available (only shown once the policy allows the visitor).
+             */
+            available_from?: number | null;
             enc_mode?: null | components["schemas"]["EncMode"];
             /** Format: int64 */
             expires_at?: number | null;
@@ -1023,7 +1169,13 @@ export interface components {
              *     without a Reveal click, but only when it has no view limit and no passphrase.
              */
             redirect_secs?: number | null;
+            /** @description Each open must be approved by the owner. */
+            require_approval: boolean;
             slug: string;
+            /** @description Split key: `{k, n, check}`; the browser needs k key parts and verifies them with `check`. */
+            split?: {
+                [key: string]: unknown;
+            } | null;
             status: components["schemas"]["AccessStatus"];
             title?: string | null;
             /** Format: int64 */
@@ -1056,6 +1208,8 @@ export interface components {
         ShareStatus: "uploading" | "active" | "expired" | "burned" | "revoked";
         ShareSummary: {
             /** Format: int64 */
+            available_from?: number | null;
+            /** Format: int64 */
             created_at: number;
             enc_mode: components["schemas"]["EncMode"];
             /** Format: double */
@@ -1071,6 +1225,7 @@ export interface components {
             kind: components["schemas"]["ShareKind"];
             /** Format: int64 */
             max_views?: number | null;
+            notify_on_open: boolean;
             passphrase_required: boolean;
             policy: components["schemas"]["PolicyRule"][];
             /**
@@ -1078,9 +1233,17 @@ export interface components {
              * @description Link shares: auto-redirect delay in seconds.
              */
             redirect_secs?: number | null;
+            require_approval: boolean;
             require_owner_mfa: boolean;
             slug: string;
             slug_generator: string;
+            /**
+             * Format: int64
+             * @description Split key: k of n key parts needed.
+             */
+            split_k?: number | null;
+            /** Format: int64 */
+            split_n?: number | null;
             status: components["schemas"]["ShareStatus"];
             title?: string | null;
             /** @description File share whose upload hasn't been finalised yet; not openable. */
@@ -1113,6 +1276,12 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        SplitSpec: {
+            /** Format: int64 */
+            k: number;
+            /** Format: int64 */
+            n: number;
+        };
         StepUpRequest: {
             totp: string;
         };
@@ -1135,6 +1304,11 @@ export interface components {
         UpdateShareRequest: {
             /**
              * Format: int64
+             * @description Unix time the content becomes available; 0 removes the time-lock.
+             */
+            available_from?: number | null;
+            /**
+             * Format: int64
              * @description Unix time; 0 removes the expiry.
              */
             expires_at?: number | null;
@@ -1143,12 +1317,14 @@ export interface components {
              * @description 0 removes the view limit.
              */
             max_views?: number | null;
+            notify_on_open?: boolean | null;
             policy?: components["schemas"]["PolicyRule"][] | null;
             /**
              * Format: int64
              * @description Link shares: seconds before auto-redirect (0-60); -1 turns redirecting off.
              */
             redirect_secs?: number | null;
+            require_approval?: boolean | null;
             require_owner_mfa?: boolean | null;
             /** @description Revoke now: content is wiped immediately. */
             revoke?: boolean;
@@ -1160,6 +1336,8 @@ export interface components {
             /** Format: int64 */
             id: number;
             name: string;
+            /** @description Webhook for notifications (Slack/Teams/Mattermost-compatible). */
+            notify_webhook?: string | null;
             role: components["schemas"]["Role"];
         };
         VerifyReport: {
@@ -1186,6 +1364,64 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    approvals_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingApproval"][];
+                };
+            };
+        };
+    };
+    approvals_decide: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Decide"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     audit_list: {
         parameters: {
             query?: {
@@ -1618,6 +1854,37 @@ export interface operations {
             };
         };
     };
+    profile_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileUpdate"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     step_up: {
         parameters: {
             query?: never;
@@ -1730,6 +1997,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    notifications_list: {
+        parameters: {
+            query?: {
+                /** @description Only unread ones. */
+                unread?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationList"];
+                };
+            };
+        };
+    };
+    notifications_read: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationList"];
                 };
             };
         };

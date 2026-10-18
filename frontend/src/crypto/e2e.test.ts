@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CHUNK_OVERHEAD, DecryptError, decryptChunk, decryptShare, derivePassphraseKeys, encryptChunk, encryptShare, fromB64, keyFromFragment, toB64, unwrapDek } from './e2e'
+import { dekFromParts, encryptShareSplit, parsePart, CHUNK_OVERHEAD, DecryptError, decryptChunk, decryptShare, derivePassphraseKeys, encryptChunk, encryptShare, fromB64, keyFromFragment, toB64, unwrapDek } from './e2e'
 
 // Cheap KDF params so tests are fast; production uses DEFAULT_KDF.
 const FAST = { m: 1024, t: 1, p: 1 }
@@ -55,5 +55,20 @@ describe('e2e', () => {
     await expect(decryptChunk(dek, 2, 7, false, ct)).rejects.toBeInstanceOf(DecryptError)
     await expect(decryptChunk(dek, 2, 8, true, ct)).rejects.toBeInstanceOf(DecryptError)
     await expect(decryptChunk(dek, 3, 7, true, ct)).rejects.toBeInstanceOf(DecryptError)
+  })
+
+  it('split keys: any k parts decrypt, wrong combinations are caught before opening', async () => {
+    const enc = await encryptShareSplit(payload, 2, 3)
+    expect(enc.meta.split).toMatchObject({ k: 2, n: 3 })
+    expect(enc.parts).toHaveLength(3)
+    const link = `https://share.example/s/abc#p=${enc.parts[2]}`
+    const dek = await dekFromParts(enc.meta, [enc.parts[0], link])
+    expect(await decryptShare(enc.ciphertext, enc.meta, { dek })).toEqual(payload)
+
+    const other = await encryptShareSplit(payload, 2, 3)
+    await expect(dekFromParts(enc.meta, [enc.parts[0], other.parts[1]])).rejects.toThrow(/don't belong together/)
+    await expect(dekFromParts(enc.meta, [enc.parts[0]])).rejects.toThrow(/2 key parts/)
+    await expect(dekFromParts(enc.meta, [enc.parts[1], enc.parts[1]])).rejects.toThrow(/twice/)
+    expect(() => parsePart('hello')).toThrow()
   })
 })

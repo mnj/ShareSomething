@@ -22,6 +22,8 @@ export function EditShare({ share, onDone }: { share: ShareSummary; onDone: () =
   const [access, setAccess] = useState(() => accessFromPolicy(share.policy, share.require_owner_mfa))
   const [redirect, setRedirect] = useState(share.redirect_secs != null)
   const [redirectSecs, setRedirectSecs] = useState(share.redirect_secs ?? 5)
+  const [requireApproval, setRequireApproval] = useState(share.require_approval)
+  const [notifyOnOpen, setNotifyOnOpen] = useState(share.notify_on_open)
 
   const save = useMutation({
     mutationFn: () => {
@@ -35,6 +37,8 @@ export function EditShare({ share, onDone }: { share: ShareSummary; onDone: () =
             max_views: Number(maxViews) || 0,
             require_owner_mfa: access.requireMfa,
             redirect_secs: share.kind === 'link' ? (redirect ? redirectSecs : -1) : undefined,
+            require_approval: requireApproval,
+            notify_on_open: notifyOnOpen,
             policy: accessToPolicy(access),
           },
         }),
@@ -92,6 +96,14 @@ export function EditShare({ share, onDone }: { share: ShareSummary; onDone: () =
           seconds
         </label>
       )}
+      <label className="check">
+        <input type="checkbox" checked={requireApproval} onChange={(e) => setRequireApproval(e.target.checked)} />
+        Ask me to approve each open
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={notifyOnOpen} onChange={(e) => setNotifyOnOpen(e.target.checked)} />
+        Notify me when it's opened
+      </label>
       <AccessEditor value={access} onChange={setAccess} />
       <ErrorNote error={save.error} />
       <div className="row">

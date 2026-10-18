@@ -11,10 +11,72 @@ export function Settings() {
   return (
     <div className="stack">
       <h1>Settings</h1>
+      <Profile />
       <Passkeys />
       <AuthenticatorApp />
       <Templates />
     </div>
+  )
+}
+
+function Profile() {
+  const me = useMe()
+  const qc = useQueryClient()
+  const user = me.data?.user
+  const [name, setName] = useState<string | null>(null)
+  const [email, setEmail] = useState<string | null>(null)
+  const [webhook, setWebhook] = useState<string | null>(null)
+  const save = useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.PUT('/api/auth/profile', {
+          body: {
+            name: name ?? undefined,
+            email: me.data?.mode === 'single' ? (email ?? undefined) : undefined,
+            notify_webhook: webhook ?? undefined,
+          },
+        }),
+      ),
+    onSuccess: (d) => {
+      qc.setQueryData(['me'], d)
+      setName(null)
+      setEmail(null)
+      setWebhook(null)
+    },
+  })
+  if (!user) return null
+  return (
+    <form
+      className="card stack"
+      onSubmit={(e) => {
+        e.preventDefault()
+        save.mutate()
+      }}
+    >
+      <h2>Profile & notifications</h2>
+      <div className="grid-2">
+        <label className="field">
+          Name
+          <input value={name ?? user.name} onChange={(e) => setName(e.target.value)} maxLength={80} />
+        </label>
+        <label className="field">
+          Email <span className="hint">{me.data?.mode === 'single' ? 'for notifications' : 'managed by your admin'}</span>
+          <input type="email" value={email ?? user.email ?? ''} disabled={me.data?.mode !== 'single'} onChange={(e) => setEmail(e.target.value)} />
+        </label>
+      </div>
+      <label className="field">
+        Notification webhook <span className="hint">optional https URL for Slack, Teams or Mattermost incoming webhooks</span>
+        <input type="url" value={webhook ?? user.notify_webhook ?? ''} onChange={(e) => setWebhook(e.target.value)} placeholder="https://hooks.slack.com/services/…" />
+      </label>
+      <p className="hint">You're notified here, and by email/webhook when set, when someone asks to open a share that needs your approval, or opens one with "notify me" on.</p>
+      <ErrorNote error={save.error} />
+      <div className="row">
+        <button className="btn btn-primary" disabled={save.isPending || (name === null && email === null && webhook === null)}>
+          Save
+        </button>
+        {save.isSuccess && <span className="badge badge-ok">saved</span>}
+      </div>
+    </form>
   )
 }
 

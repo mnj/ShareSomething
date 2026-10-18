@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { api, unwrap } from './api/client'
 import { useMe } from './lib/auth'
@@ -12,6 +12,12 @@ import { ShareView } from './pages/ShareView'
 function Layout() {
   const me = useMe()
   const loc = useLocation()
+  const unread = useQuery({
+    queryKey: ['notifications'],
+    queryFn: () => unwrap(api.GET('/api/notifications')),
+    enabled: !!me.data?.authenticated,
+    refetchInterval: 15_000,
+  }).data?.unread
   const qc = useQueryClient()
   return (
     <>
@@ -23,6 +29,11 @@ function Layout() {
           <nav className="row">
             <Link to="/" className="btn btn-small btn-ghost">
               Shares
+              {!!unread && (
+                <span className="badge badge-warn nav-count" aria-label={`${unread} unread notifications`}>
+                  {unread}
+                </span>
+              )}
             </Link>
             {(me.data.user?.role === 'admin' || me.data.user?.role === 'auditor') && (
               <Link to="/audit" className="btn btn-small btn-ghost">

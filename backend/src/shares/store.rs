@@ -34,6 +34,11 @@ pub struct ShareRow {
     pub upload_token_hash: Option<Vec<u8>>,
     pub redirect_secs: Option<i64>,
     pub owner_id: i64,
+    pub available_from: Option<i64>,
+    pub require_approval: bool,
+    pub notify_on_open: bool,
+    pub split_k: Option<i64>,
+    pub split_n: Option<i64>,
 }
 
 impl ShareRow {
@@ -71,6 +76,7 @@ impl ShareRow {
             views: self.views,
             require_owner_mfa: self.require_owner_mfa,
             owner_id: self.owner_id,
+            available_from: self.available_from,
             rules,
         }
     }

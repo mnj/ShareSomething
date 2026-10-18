@@ -26,6 +26,9 @@ pub enum AppError {
     Conflict(String),
     #[error("too many requests, slow down")]
     TooManyRequests,
+    /// 403 `need_approval`: the owner has to approve this open.
+    #[error("waiting for the owner to approve")]
+    NeedApproval { id: String, secret: Option<String> },
     #[error("server is not initialised; run `sharesomething admin init`")]
     NotInitialised,
     #[error(transparent)]
@@ -37,6 +40,12 @@ pub struct ErrorBody {
     /// Stable machine-readable code.
     pub error: String,
     pub message: String,
+    /// `need_approval`: the pending approval to wait for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<String>,
+    /// `need_approval`, first answer only: proves the waiting browser is the requester.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_secret: Option<String>,
 }
 
 impl AppError {
@@ -47,6 +56,7 @@ impl AppError {
             AppError::AuthFailed(code, _) => (StatusCode::UNAUTHORIZED, code),
             AppError::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
             AppError::Access(code, _) => (StatusCode::FORBIDDEN, code),
+            AppError::NeedApproval { .. } => (StatusCode::FORBIDDEN, "need_approval"),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             AppError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             AppError::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
@@ -66,11 +76,17 @@ impl IntoResponse for AppError {
             }
             other => other.to_string(),
         };
+        let (approval_id, approval_secret) = match self {
+            AppError::NeedApproval { id, secret } => (Some(id), secret),
+            _ => (None, None),
+        };
         (
             status,
             Json(ErrorBody {
                 error: code.into(),
                 message,
+                approval_id,
+                approval_secret,
             }),
         )
             .into_response()

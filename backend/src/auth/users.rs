@@ -236,6 +236,8 @@ pub struct UserInfo {
     pub email: Option<String>,
     pub name: String,
     pub role: Role,
+    /// Webhook for notifications (Slack/Teams/Mattermost-compatible).
+    pub notify_webhook: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -278,6 +280,16 @@ pub(super) async fn me_response(state: &AppState, user: Option<&CurrentUser>) ->
         Some(id) => load_user(state, id).await.ok(),
         None => None,
     };
+    let webhook: Option<String> = match user {
+        Some(u) => {
+            sqlx::query_as::<_, (Option<String>,)>("SELECT notify_webhook FROM users WHERE id = ?")
+                .bind(u.id)
+                .fetch_one(&state.db)
+                .await?
+                .0
+        }
+        None => None,
+    };
     Ok(MeResponse {
         authenticated: user.is_some(),
         initialised,
@@ -287,6 +299,7 @@ pub(super) async fn me_response(state: &AppState, user: Option<&CurrentUser>) ->
             email: r.email.clone(),
             name: r.name.clone(),
             role: r.role,
+            notify_webhook: webhook.clone(),
         }),
         totp_enabled: row.as_ref().is_some_and(|r| r.totp_secret.is_some()),
         passkeys: match subject {
@@ -482,10 +495,82 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(totp_setup))
         .routes(routes!(totp_confirm))
         .routes(routes!(totp_disable))
+        .routes(routes!(update_profile))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct ProfileUpdate {
+    pub name: Option<String>,
+    /// Notification email. Single mode only (in team mode the email is the account identity).
+    pub email: Option<String>,
+    /// https webhook for notifications; empty string removes it.
+    pub notify_webhook: Option<String>,
+}
+
+/// Update your name, notification email or webhook.
+#[utoipa::path(put, path = "/auth/profile", tag = "auth", operation_id = "profile_update", request_body = ProfileUpdate,
+    responses((status = 200, body = MeResponse), (status = 400, body = crate::error::ErrorBody)))]
+async fn update_profile(
+    State(state): State<AppState>,
+    client: ClientInfo,
+    user: CurrentUser,
+    Json(req): Json<ProfileUpdate>,
+) -> AppResult<Json<MeResponse>> {
+    let mut changed = vec![];
+    if let Some(name) = req.name.map(|n| n.trim().to_string()) {
+        if name.is_empty() || name.chars().count() > 80 {
+            return Err(AppError::BadRequest("name must be 1-80 characters".into()));
+        }
+        sqlx::query("UPDATE users SET name = ? WHERE id = ?")
+            .bind(&name)
+            .bind(user.id)
+            .execute(&state.db)
+            .await?;
+        changed.push("name");
+    }
+    if let Some(email) = req.email.map(|e| e.trim().to_ascii_lowercase()) {
+        if state.cfg.mode != InstanceMode::Single {
+            return Err(AppError::BadRequest("in team mode an admin changes account emails".into()));
+        }
+        let email = (!email.is_empty()).then_some(email);
+        if email.as_ref().is_some_and(|e| !e.contains('@') || e.len() > 254) {
+            return Err(AppError::BadRequest("enter a valid email address".into()));
+        }
+        sqlx::query("UPDATE users SET email = ? WHERE id = ?")
+            .bind(&email)
+            .bind(user.id)
+            .execute(&state.db)
+            .await?;
+        changed.push("email");
+    }
+    if let Some(hook) = req.notify_webhook.map(|h| h.trim().to_string()) {
+        let hook = (!hook.is_empty()).then_some(hook);
+        if let Some(h) = &hook {
+            crate::notify::validate_webhook(h)?;
+        }
+        sqlx::query("UPDATE users SET notify_webhook = ? WHERE id = ?")
+            .bind(&hook)
+            .bind(user.id)
+            .execute(&state.db)
+            .await?;
+        changed.push("notify_webhook");
+    }
+    if !changed.is_empty() {
+        state
+            .audit
+            .record(
+                user.event(Action::UserUpdated)
+                    .client(&client)
+                    .target("user", user.id.to_string(), Some(user.label.clone()))
+                    .detail("changed", &changed),
+            )
+            .await?;
+    }
+    Ok(Json(me_response(&state, Some(&user)).await?))
 }
 
 /// Changing credentials requires a recent second factor, if one exists.
-pub(super) async fn require_fresh_mfa(state: &AppState, user: &CurrentUser) -> AppResult<()> {
+pub async fn require_fresh_mfa(state: &AppState, user: &CurrentUser) -> AppResult<()> {
     if user_has_mfa(state, user.id).await? && !user.mfa_fresh() {
         return Err(AppError::Access(
             "need_owner_mfa",

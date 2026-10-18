@@ -187,6 +187,8 @@ pub struct ShareState {
     pub max_views: Option<i64>,
     pub views: i64,
     pub require_owner_mfa: bool,
+    /// Time-lock: content is only released from this time on.
+    pub available_from: Option<i64>,
     /// The user who owns the share; the `owner` rule and owner MFA refer to them.
     pub owner_id: i64,
     pub rules: Vec<PolicyRule>,
@@ -200,6 +202,8 @@ pub enum Decision {
     Denied,
     NeedOwnerLogin,
     NeedOwnerMfa,
+    /// Allowed, but time-locked until this unix time.
+    NotYet(i64),
     /// Sign in with one of these methods (`email_otp`, `oidc:<p>`; empty = any configured).
     NeedRecipientAuth(Vec<String>),
 }
@@ -331,6 +335,10 @@ pub fn evaluate(share: &ShareState, ctx: &AccessContext) -> Decision {
             Some(_) => {}
         }
     }
+    // Checked last, so visitors who aren't allowed in don't even learn when it unlocks.
+    if let Some(at) = share.available_from.filter(|at| *at > ctx.now) {
+        return Decision::NotYet(at);
+    }
     Decision::Allow
 }
 
@@ -372,6 +380,7 @@ mod tests {
             max_views: None,
             views: 0,
             require_owner_mfa: false,
+            available_from: None,
             owner_id: 1,
             rules,
         }
@@ -413,6 +422,20 @@ mod tests {
         s.require_owner_mfa = true;
         assert_eq!(evaluate(&s, &other), Decision::Denied, "owner MFA is the owner's, not any user's");
         assert_eq!(evaluate(&s, &owner(anon("1.1.1.1"), Some(1))), Decision::Allow);
+    }
+
+    #[test]
+    fn time_lock_applies_after_policy() {
+        let mut s = share(vec![inc(ip_rule("10.0.0.0/8"))]);
+        s.available_from = Some(NOW + 60);
+        assert_eq!(
+            evaluate(&s, &anon("8.8.8.8")),
+            Decision::Denied,
+            "outsiders don't learn the unlock time"
+        );
+        assert_eq!(evaluate(&s, &anon("10.0.0.1")), Decision::NotYet(NOW + 60));
+        s.available_from = Some(NOW);
+        assert_eq!(evaluate(&s, &anon("10.0.0.1")), Decision::Allow);
     }
 
     #[test]

@@ -8,7 +8,7 @@ import { ErrorNote } from '../components/ErrorNote'
 import { FilePicker } from '../components/FilePicker'
 import { AccessEditor } from '../components/AccessEditor'
 import { SlugPicker, type SlugChoice } from '../components/SlugPicker'
-import { encryptShare } from '../crypto/e2e'
+import { encryptShare, encryptShareSplit } from '../crypto/e2e'
 import { accessToPolicy, DEFAULT_ACCESS, type AccessState } from '../lib/access'
 import { useMe } from '../lib/auth'
 import { formatBytes, uploadFiles, type Progress } from '../lib/files'
@@ -35,6 +35,8 @@ interface Created {
   share: ShareSummary
   fullUrl: string
   passphrase: boolean
+  /** Split keys: one link per key holder. */
+  splitLinks?: string[]
 }
 
 export function NewShare() {
@@ -56,6 +58,12 @@ export function NewShare() {
   const [maxViews, setMaxViews] = useState<number | null>(1)
   const [redirect, setRedirect] = useState(false)
   const [redirectSecs, setRedirectSecs] = useState(5)
+  const [availableFrom, setAvailableFrom] = useState('')
+  const [requireApproval, setRequireApproval] = useState(false)
+  const [notifyOnOpen, setNotifyOnOpen] = useState(false)
+  const [splitOn, setSplitOn] = useState(false)
+  const [splitK, setSplitK] = useState(2)
+  const [splitN, setSplitN] = useState(3)
   const [access, setAccess] = useState<AccessState>(DEFAULT_ACCESS)
   const [files, setFiles] = useState<File[]>([])
   const [progress, setProgress] = useState<Progress | null>(null)
@@ -85,6 +93,8 @@ export function NewShare() {
   }
 
 
+  const useSplit = encMode === 'e2e' && splitOn
+
   const create = useMutation({
     mutationFn: async (): Promise<Created> => {
       const base = {
@@ -98,6 +108,10 @@ export function NewShare() {
         policy: accessToPolicy(access),
         files: kind === 'files' ? files.map((f) => ({ size: f.size })) : null,
         redirect_secs: kind === 'link' && redirect ? redirectSecs : null,
+        available_from: availableFrom ? Math.floor(new Date(availableFrom).getTime() / 1000) : null,
+        require_approval: requireApproval,
+        notify_on_open: notifyOnOpen,
+        split: useSplit ? { k: splitK, n: splitN } : null,
       }
       if (kind === 'files' && files.length === 0) throw new Error('Choose at least one file.')
       const upload = async (res: Schemas['CreateShareResponse'], dek?: Uint8Array<ArrayBuffer>) => {
@@ -108,6 +122,12 @@ export function NewShare() {
         const res = await unwrap(api.POST('/api/shares', { body: { ...base, payload: payload(), passphrase: passphrase || null } }))
         await upload(res)
         return { share: res.share, fullUrl: res.share.url, passphrase: !!passphrase }
+      }
+      if (useSplit) {
+        const enc = await encryptShareSplit(payload(), splitK, splitN)
+        const res = await unwrap(api.POST('/api/shares', { body: { ...base, ciphertext: enc.ciphertext, enc_meta: { ...enc.meta } } }))
+        await upload(res, enc.dek)
+        return { share: res.share, fullUrl: res.share.url, passphrase: false, splitLinks: enc.parts.map((p) => `${res.share.url}#p=${p}`) }
       }
       const enc = await encryptShare(payload(), passphrase || undefined)
       const res = await unwrap(
@@ -199,7 +219,13 @@ export function NewShare() {
           </label>
           <label className="field">
             Passphrase <span className="hint">optional, share it another way</span>
-            <input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} autoComplete="new-password" />
+            <input
+              type="password"
+              value={useSplit ? '' : passphrase}
+              disabled={useSplit}
+              onChange={(e) => setPassphrase(e.target.value)}
+              autoComplete="new-password"
+            />
           </label>
           <label className="field">
             Expires
@@ -233,6 +259,53 @@ export function NewShare() {
       </section>
 
       <section className="card stack">
+        <h2>Opening rules</h2>
+        <label className="field narrow-field">
+          Available from <span className="hint">optional time-lock; nothing is released before this</span>
+          <input type="datetime-local" step={1} value={availableFrom} onChange={(e) => setAvailableFrom(e.target.value)} />
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={requireApproval} onChange={(e) => setRequireApproval(e.target.checked)} />
+          Ask me to approve each open (you're notified and approve or deny it from the dashboard)
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={notifyOnOpen} onChange={(e) => setNotifyOnOpen(e.target.checked)} />
+          Notify me when it's opened
+        </label>
+        {encMode === 'e2e' && (
+          <label className="check">
+            <input type="checkbox" checked={splitOn} onChange={(e) => setSplitOn(e.target.checked)} />
+            Split the key between several people: opening needs
+            <input
+              type="number"
+              className="inline-number"
+              min={2}
+              max={splitN}
+              value={splitK}
+              onChange={(e) => setSplitK(Math.max(2, Math.min(splitN, Number(e.target.value) || 2)))}
+              aria-label="Key parts needed"
+            />
+            of
+            <input
+              type="number"
+              className="inline-number"
+              min={2}
+              max={10}
+              value={splitN}
+              onChange={(e) => {
+                const n = Math.max(2, Math.min(10, Number(e.target.value) || 2))
+                setSplitN(n)
+                setSplitK((k) => Math.min(k, n))
+              }}
+              aria-label="Key holders"
+            />
+            key holders
+          </label>
+        )}
+        {useSplit && <p className="hint">Each key holder gets their own link. No single person (and not the server) can open the share; any {splitK} of them together can. Ideal for break-glass credentials.</p>}
+      </section>
+
+      <section className="card stack">
         <h2>Who can open it</h2>
         <AccessEditor value={access} onChange={setAccess} />
       </section>
@@ -263,11 +336,27 @@ function CreatedView({ created, onAnother }: { created: Created; onAnother: () =
     <div className="stack">
       <h1>Share created</h1>
       <section className="card stack">
-        <div className="link-box">
-          <code>{fullUrl}</code>
-          <CopyButton value={fullUrl} label="Copy link" className="btn-primary" />
-        </div>
-        {keyInLink && (
+        {created.splitLinks ? (
+          <>
+            <p>
+              Send each key holder <b>their own</b> link. Any {share.split_k} of the {share.split_n} are needed to open the share.
+            </p>
+            {created.splitLinks.map((l, i) => (
+              <div key={l} className="link-box">
+                <span className="badge">Key holder {i + 1}</span>
+                <code>{l}</code>
+                <CopyButton value={l} label="Copy" />
+              </div>
+            ))}
+            <p className="note note-warn">These links are shown only once and are not stored anywhere. Copy them now.</p>
+          </>
+        ) : (
+          <div className="link-box">
+            <code>{fullUrl}</code>
+            <CopyButton value={fullUrl} label="Copy link" className="btn-primary" />
+          </div>
+        )}
+        {keyInLink && !created.splitLinks && (
           <p className="note note-warn">This link contains the decryption key. It is shown only once and is not stored anywhere, so copy it now.</p>
         )}
         {created.passphrase && <p className="note">Send the passphrase separately, e.g. by phone or another chat.</p>}

@@ -79,12 +79,13 @@ document, so they map naturally onto Elastic, Splunk CIM, Sentinel and others:
 | `auth.mfa.step_up` / `auth.mfa.step_up_failed` | Fresh-MFA confirmation | `method` |
 | `auth.passkey.added` / `auth.passkey.removed` | Passkey changes | passkey id/name |
 | `auth.totp.enabled` / `auth.totp.disabled` / `auth.password.changed` | Credential changes (web or CLI) | |
-| `user.created` / `user.updated` | Account administration | role |
+| `user.created` / `user.updated` | Account administration and profile changes | role, changed fields |
 | `share.created` / `share.updated` | Share lifecycle | kind, encryption, limits, the full access **policy**, changed fields |
 | `share.revoked` / `share.deleted` / `share.purged` | Removal (manual, or by retention) | |
 | `share.opened` | Content released | `burned`, `views`, `max_views` |
-| `share.denied` | Open refused | `reason`: policy, sign_in_required, owner_login_required, owner_mfa_required |
+| `share.denied` | Open refused | `reason`: policy, sign_in_required, owner_login_required, owner_mfa_required, time_locked |
 | `share.passphrase_failed` / `share.destroyed` | Wrong passphrase / destroyed after too many | attempts |
+| `share.approval.requested` / `.approved` / `.denied` | Owner-approval shares | approval id, requester |
 | `share.file_uploaded` / `share.file_downloaded` | File transfer | file index, bytes, via (chunks/stream) |
 | `recipient.code_requested` | Email code asked for | `sent` (false = address had no access; the visitor isn't told) |
 | `recipient.verified` / `recipient.verify_failed` | Recipient sign-in (email code / OIDC / GitHub) | `method`, `reason` |

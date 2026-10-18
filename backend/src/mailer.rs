@@ -53,6 +53,32 @@ impl Mailer {
         !matches!(self, Mailer::Disabled)
     }
 
+    /// A plain notification email (share opened, approval requested, ...).
+    pub async fn send_notice(&self, to: &str, subject: &str, body: &str) -> anyhow::Result<()> {
+        match self {
+            Mailer::Disabled => anyhow::bail!("email is disabled"),
+            Mailer::Log => {
+                tracing::info!(%to, %subject, "notification email (email.mode = log)");
+                Ok(())
+            }
+            Mailer::Smtp { transport, from } => {
+                let msg = Message::builder()
+                    .from(from.clone())
+                    .to(to.parse()?)
+                    .subject(subject)
+                    .header(ContentType::TEXT_PLAIN)
+                    .body(body.to_string())?;
+                transport.send(msg).await?;
+                Ok(())
+            }
+            #[cfg(test)]
+            Mailer::Capture(sent) => {
+                sent.lock().unwrap().push((to.to_string(), format!("{subject}\n{body}")));
+                Ok(())
+            }
+        }
+    }
+
     pub async fn send_code(&self, to: &str, code: &str, base_url: &str) -> anyhow::Result<()> {
         let subject = format!("Your ShareSomething code: {code}");
         let body = format!(

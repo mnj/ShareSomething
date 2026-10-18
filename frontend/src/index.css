@@ -554,3 +554,23 @@ span.note-error {
     display: none;
   }
 }
+.narrow-field {
+  max-width: 320px;
+}
+.approvals {
+  border-color: var(--accent);
+}
+.approval {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.approval:last-of-type {
+  border-bottom: 0;
+}
+.notifications summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.nav-count {
+  margin-left: 4px;
+}
